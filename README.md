@@ -49,7 +49,7 @@ SET PATH=%PATH%;C:\msys64\mingw64\bin
 
 Use `SETX` to persist this change over console and computer restarts.
 ```sh
-SETX PATH %PATH%
+SETX PATH "%PATH%"
 ```
 
 Build the project by `cd`ing to the project folder and running `cargo build`.
