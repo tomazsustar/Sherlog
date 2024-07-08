@@ -4,3 +4,5 @@
 - Run NSIS to create a release installer
 - Test installer, in particular, remove C:\msys64\mingw64\bin from the PATH variable and make sure that the program finds all its dynamic libraries and runs properly
 - Update release notes
+    - show git commit:  git rev-parse HEAD
+    - show sha256:  sha256sum NSIS/Sherlog-Setup-vX.Y.Z.exe

@@ -1,4 +1,4 @@
-//Hide Windows cmd console on opening the application
+//Uncomment the line below to hide Windows cmd console on opening the application
 //#![windows_subsystem = "windows"]
 
 extern crate chrono;
