@@ -7,7 +7,7 @@ license = "GPL-3.0-only"
 description = "Log viewer and analysis tool"
 keywords = ["visualization", "log", "analyzer", "debug-tool"]
 categories = ["visualization", "parser-implementations"]
-repository = "https://github.com/BenjaminRi/Sherlog/"
+repository = "https://github.com/tomazsustar/Sherlog"
 
 [package.metadata.winresource]
 ProductName = "Sherlog"
