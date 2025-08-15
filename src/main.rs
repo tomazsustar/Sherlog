@@ -1248,7 +1248,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	}
 
 	let search_entry = gtk::SearchEntry::new();
-	let case_sensitive_search = gtk::CheckButton::with_label("Case Sensitive");
+	let case_sensitive_search = gtk::CheckButton::with_label("Case sensitive");
 	case_sensitive_search.set_active(false);
 
 	let store_rc_clone = store_rc.clone();
@@ -1265,18 +1265,36 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 		search_changed(&search_entry_clone,w, &mut store_rc_clone.borrow_mut(), &drawing_area_clone);
 	} );
 
+	let case_sensitive_search_box = gtk::Box::new(Orientation::Horizontal, 4);
 	split_pane_left.pack_start(&search_entry, false, false, 0);
-	split_pane_left.pack_start(&case_sensitive_search, false, false, 0);
+	case_sensitive_search_box.pack_end(&case_sensitive_search, false, false, 0);
+	split_pane_left.pack_start(&case_sensitive_search_box, false, false, 0);
 
 	let timediff_entry = gtk::Entry::new();
 	timediff_entry.set_editable(false);
 	timediff_entry.set_alignment(1.0); //1.0 is right-aligned
 	timediff_entry.set_text("+0D 00:00:00.000");
 	let timediff_label = gtk::Label::new(Some("Δt (hover-anchor):"));
+	timediff_label.set_xalign(1.0); // right align label text
+	timediff_label.set_size_request(120, -1);
 	let timediff_box = gtk::Box::new(Orientation::Horizontal, 4);
 	timediff_box.pack_start(&timediff_label, false, false, 0);
 	timediff_box.pack_start(&timediff_entry, true, true, 0);
 	split_pane_left.pack_start(&timediff_box, false, false, 0);
+
+	split_pane.pack1(&split_pane_left, false, false);
+
+	let timeshift_entry = gtk::Entry::new();
+	timeshift_entry.set_editable(true);
+	timeshift_entry.set_alignment(1.0); //1.0 is right-aligned
+	timeshift_entry.set_text("+0D 00:00:00.000");
+	let timeshift_label = gtk::Label::new(Some("Time shift:"));
+	timeshift_label.set_xalign(1.0); // right align label text
+	timeshift_label.set_size_request(120, -1);
+	let timeshift_box = gtk::Box::new(Orientation::Horizontal, 4);
+	timeshift_box.pack_start(&timeshift_label, false, false, 0);
+	timeshift_box.pack_start(&timeshift_entry, true, true, 0);
+	split_pane_left.pack_start(&timeshift_box, false, false, 0);
 
 	split_pane.pack1(&split_pane_left, false, false);
 
