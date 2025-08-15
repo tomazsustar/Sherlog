@@ -1202,11 +1202,14 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	}
 
 	fn search_changed(
-		w: &gtk::SearchEntry,
+		search_entry: &gtk::SearchEntry,
+		case_sensitive_btn: &gtk::CheckButton,
 		store: &mut LogStoreLinear,
 		drawing_area: &gtk::DrawingArea,
 	) {
-		let search_text = w.text().as_str().to_string();
+		let search_text = search_entry.text().to_string();
+    	let case_sensitive = case_sensitive_btn.is_active();
+
 		if search_text.is_empty() {
 			log::info!("Search empty");
 			store.filter_store(
@@ -1216,28 +1219,54 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 			);
 		} else {
 			log::info!("search_changed {}", &search_text);
-			store.filter_store(
-				&|entry: &LogEntryExt| entry.message.contains(&search_text),
-				true,
-				crate::model_internal::VISIBLE_OFF_FILTER,
-			);
-			store.filter_store(
-				&|entry: &LogEntryExt| !entry.message.contains(&search_text),
-				false,
-				crate::model_internal::VISIBLE_OFF_FILTER,
-			);
+			if case_sensitive {
+				store.filter_store(
+					&|entry: &LogEntryExt| entry.message.contains(&search_text),
+					true,
+					crate::model_internal::VISIBLE_OFF_FILTER,
+				);
+				store.filter_store(
+					&|entry: &LogEntryExt| !entry.message.contains(&search_text),
+					false,
+					crate::model_internal::VISIBLE_OFF_FILTER,
+				);
+			} else {
+				let search_text_lower = search_text.to_lowercase();
+				store.filter_store(
+					&|entry: &LogEntryExt| entry.message.to_lowercase().contains(&search_text_lower),
+					true,
+					crate::model_internal::VISIBLE_OFF_FILTER,
+				);
+				store.filter_store(
+					&|entry: &LogEntryExt| !entry.message.to_lowercase().contains(&search_text_lower),
+					false,
+					crate::model_internal::VISIBLE_OFF_FILTER,
+				);
+			}
 		}
 		drawing_area.queue_draw();
 	}
 
 	let search_entry = gtk::SearchEntry::new();
+	let case_sensitive_search = gtk::CheckButton::with_label("Case Sensitive");
+	case_sensitive_search.set_active(false);
+
 	let store_rc_clone = store_rc.clone();
 	let drawing_area_clone = drawing_area.clone();
+	let case_sensitive_search_clone = case_sensitive_search.clone();
 	search_entry.connect_search_changed(move |w| {
-		search_changed(w, &mut store_rc_clone.borrow_mut(), &drawing_area_clone);
+		search_changed(w, &case_sensitive_search_clone, &mut store_rc_clone.borrow_mut(), &drawing_area_clone);
 	});
+	
+	let store_rc_clone = store_rc.clone();
+	let drawing_area_clone = drawing_area.clone();
+	let search_entry_clone = search_entry.clone();
+	case_sensitive_search.connect_toggled(move |w| {
+		search_changed(&search_entry_clone,w, &mut store_rc_clone.borrow_mut(), &drawing_area_clone);
+	} );
 
 	split_pane_left.pack_start(&search_entry, false, false, 0);
+	split_pane_left.pack_start(&case_sensitive_search, false, false, 0);
 
 	let timediff_entry = gtk::Entry::new();
 	timediff_entry.set_editable(false);
