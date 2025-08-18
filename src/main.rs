@@ -1231,6 +1231,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	timeshift_entry.set_editable(true);
 	timeshift_entry.set_alignment(1.0); //1.0 is right-aligned
 	timeshift_entry.set_text("+0D 00:00:00.000");
+	timeshift_entry.set_tooltip_text(Some("Shift the timestamps of Sensor and Controller log entries."));
 	let store_rc_clone = store_rc.clone();
 	let drawing_area_clone = drawing_area.clone();
 
