@@ -19,6 +19,7 @@ use std::time::Instant;
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::fmt::Write;
 
 #[allow(unused_imports)]
 use regex::Regex;
@@ -27,8 +28,8 @@ mod log_store;
 mod model;
 mod model_internal;
 mod parse;
-mod user_input;
-mod user_actions;
+mod ui_formatting;
+mod ui_actions;
 
 use log_store::LogStoreLinear;
 use log_store::ScrollBarVert;
@@ -369,19 +370,12 @@ fn draw(
 		}
 
 		let date_str = entry.timestamp.format("%d.%m.%y %T%.3f").to_string();
-		ctx.move_to(store.border_left + 40.0, font_offset_y);
+		ctx.move_to(store.border_left + 45.0, font_offset_y);
 		ctx.show_text(&date_str).unwrap();
 
-		let short_sev = match entry.severity {
-			model::LogLevel::Critical => "CRI",
-			model::LogLevel::Error => "ERR",
-			model::LogLevel::Warning => "WRN",
-			model::LogLevel::Info => "INF",
-			model::LogLevel::Debug => "DBG",
-			model::LogLevel::Trace => "TRC",
-		};
+		let short_sev = ui_formatting::short_severity(&entry.severity);
 
-		ctx.move_to(store.border_left + 220.0, font_offset_y);
+		ctx.move_to(store.border_left + 235.0, font_offset_y);
 		ctx.show_text(&short_sev).unwrap();
 
 		if let Some(anchor_offset) = store.anchor_offset {
@@ -408,7 +402,7 @@ fn draw(
 			}
 		}
 
-		ctx.move_to(store.border_left + 250.0, font_offset_y);
+		ctx.move_to(store.border_left + 265.0, font_offset_y);
 
 		/*let font_face = ctx.get_font_face();
 		let new_font_face = cairo::FontFace::toy_create("cairo :monospace", font_face.toy_get_slant(), font_face.toy_get_weight());
@@ -652,7 +646,7 @@ fn handle_evt_motion(
 					if let Some(anchor) = store.anchor_offset {
 						let timediff =
 							store.store[hover_entry].timestamp - store.store[anchor].timestamp;
-						let text = user_input::format_duration(timediff);
+						let text = ui_formatting::format_duration(timediff);
 						timediff_entry.set_text(&text);
 					}
 				}
@@ -1193,14 +1187,14 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	let drawing_area_clone = drawing_area.clone();
 	let case_sensitive_search_clone = case_sensitive_search.clone();
 	search_entry.connect_search_changed(move |w| {
-		user_actions::search_changed(w, &case_sensitive_search_clone, &mut store_rc_clone.borrow_mut(), &drawing_area_clone);
+		ui_actions::search_changed(w, &case_sensitive_search_clone, &mut store_rc_clone.borrow_mut(), &drawing_area_clone);
 	});
 	
 	let store_rc_clone = store_rc.clone();
 	let drawing_area_clone = drawing_area.clone();
 	let search_entry_clone = search_entry.clone();
 	case_sensitive_search.connect_toggled(move |w| {
-		user_actions::search_changed(&search_entry_clone,w, &mut store_rc_clone.borrow_mut(), &drawing_area_clone);
+		ui_actions::search_changed(&search_entry_clone,w, &mut store_rc_clone.borrow_mut(), &drawing_area_clone);
 	} );
 
 	let case_sensitive_search_box = gtk::Box::new(Orientation::Horizontal, 4);
@@ -1246,7 +1240,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 		let store_rc_clone = store_rc_clone.clone();
 		let drawing_area_clone = drawing_area_clone.clone();
 		move |entry| {
-			user_actions::timeshift_changed(
+			ui_actions::timeshift_changed(
 				entry,
 				&mut store_rc_clone.borrow_mut(),
 				&drawing_area_clone,
@@ -1409,8 +1403,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 			{
 				let clipboard = gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD);
 
-				//TODO: 13.04.2020: Can optimize this, use some sort of string stream
-				let mut clip_string = std::string::String::new();
+				let mut clip_string = std::string::String::from("SesnID Date     Time UTC+0      SEV Message\r\n");
 
 				//TODO: 13.04.2020: Can optimize this, do not go through entire store
 				for (offset, entry) in store_rc_clone
@@ -1427,11 +1420,15 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 							&& store_rc_clone.borrow().selected_range.unwrap().1 >= offset))
 						&& !store_rc_clone.borrow().excluded_single.contains(&offset)
 					{
-						//TODO: 13.04.2020: Also add log source name to string!
-						clip_string += &entry.timestamp.format("%d-%m-%y %T%.6f").to_string();
-						clip_string += &" | ";
-						clip_string += &entry.message;
-						clip_string += &"\r\n"; //TODO: 13.04.2020: Windows vs Linux file endings?
+						// Use write! for efficient string building
+						write!(
+							&mut clip_string,
+							"{} {} {} {}\r\n",
+							entry.session_id.map_or("      ".to_string(), |id| format!("{:<6}", id)),
+							entry.timestamp.format("%d-%m-%y %T%.6f"),
+							ui_formatting::short_severity(&entry.severity),
+							entry.message
+						).unwrap();
 					}
 				}
 				clipboard.set_text(&clip_string);

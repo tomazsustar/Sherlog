@@ -1,7 +1,7 @@
 // src/user_actions.rs
 
 use crate::log_store::LogStoreLinear;
-use crate::user_input;
+use crate::ui_formatting;
 use crate::model_internal::LogEntryExt;
 
 use gtk::prelude::EntryExt;
@@ -70,7 +70,7 @@ log_sources_to_shift: Rc<Vec<u32>>)
     // parse time shift from timeshift_entry format "+0D 00:00:00.000"
     let timeshift_text = entry.text().to_string();
     log::info!("timeshift_changed {}", &timeshift_text);
-    let time_shift = user_input::parse_duration(&timeshift_text);
+    let time_shift = ui_formatting::parse_duration(&timeshift_text);
     let actual_shift = time_shift - *last_shift.borrow();
     *last_shift.borrow_mut() = time_shift;
     // apply time shift
@@ -139,5 +139,5 @@ log_sources_to_shift: Rc<Vec<u32>>)
         crate::model_internal::VISIBLE_ON,
     );
     drawing_area.queue_draw();
-    entry.set_text(&user_input::format_duration(time_shift));
+    entry.set_text(&ui_formatting::format_duration(time_shift));
 }

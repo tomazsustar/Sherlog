@@ -1,4 +1,6 @@
-// src/user_input.rs
+// src/formatting.rs
+
+use crate::model::LogLevel;
 
 // +0D 00:00:00.000
 pub fn parse_duration(s: &str) -> chrono::Duration {
@@ -45,4 +47,15 @@ pub fn format_duration(duration: chrono::Duration) -> String {
         "{}{}D {:02}:{:02}:{:02}.{:03}",
         sign, days, hours, minutes, seconds, milliseconds
     )
+}
+
+pub fn short_severity(sev: &LogLevel) -> &'static str {
+    match sev {
+        LogLevel::Critical => "CRI",
+        LogLevel::Error => "ERR",
+        LogLevel::Warning => "WRN",
+        LogLevel::Info => "INF",
+        LogLevel::Debug => "DBG",
+        LogLevel::Trace => "TRC",
+    }
 }
