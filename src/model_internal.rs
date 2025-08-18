@@ -133,4 +133,34 @@ impl LogSourceExt {
 			}
 		}
 	}
+
+    pub fn collect_descendant_ids_of_filtered_roots<F>(&self, filter: &F, ids: &mut Vec<u32>)
+    where
+        F: Fn(&LogSourceExt) -> bool,
+    {
+        match &self.children {
+            LogSourceContentsExt::Sources(sources) => {
+                for root in sources {
+                    if filter(root) {
+                        root.collect_all_ids(ids);
+                    }
+                }
+            }
+            LogSourceContentsExt::Entries(_) => {}
+        }
+    }
+
+    fn collect_all_ids(&self, ids: &mut Vec<u32>) {
+        ids.push(self.id);
+        match &self.children {
+            LogSourceContentsExt::Sources(sources) => {
+                for child in sources {
+                    child.collect_all_ids(ids);
+                }
+            }
+            LogSourceContentsExt::Entries(_) => {}
+        }
+    }
+
+	
 }

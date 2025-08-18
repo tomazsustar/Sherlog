@@ -27,6 +27,8 @@ mod log_store;
 mod model;
 mod model_internal;
 mod parse;
+mod user_input;
+mod user_actions;
 
 use log_store::LogStoreLinear;
 use log_store::ScrollBarVert;
@@ -650,25 +652,7 @@ fn handle_evt_motion(
 					if let Some(anchor) = store.anchor_offset {
 						let timediff =
 							store.store[hover_entry].timestamp - store.store[anchor].timestamp;
-						let mut timediff_ms = i64::abs(timediff.num_milliseconds());
-						let days = timediff_ms / 86_400_000;
-						timediff_ms -= days * 86_400_000;
-						let hours = timediff_ms / 3_600_000;
-						timediff_ms -= hours * 3_600_000;
-						let minutes = timediff_ms / 60_000;
-						timediff_ms -= minutes * 60_000;
-						let seconds = timediff_ms / 1000;
-						timediff_ms -= seconds * 1000;
-						let milliseconds = timediff_ms;
-						let sign = if timediff.num_milliseconds() < 0 {
-							'-'
-						} else {
-							'+'
-						};
-						let text = format!(
-							"{}{}D {:02}:{:02}:{:02}.{:03}",
-							sign, days, hours, minutes, seconds, milliseconds
-						);
+						let text = user_input::format_duration(timediff);
 						timediff_entry.set_text(&text);
 					}
 				}
@@ -1201,52 +1185,6 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 		split_pane_left.pack_start(&check_btn, false, false, 0);
 	}
 
-	fn search_changed(
-		search_entry: &gtk::SearchEntry,
-		case_sensitive_btn: &gtk::CheckButton,
-		store: &mut LogStoreLinear,
-		drawing_area: &gtk::DrawingArea,
-	) {
-		let search_text = search_entry.text().to_string();
-    	let case_sensitive = case_sensitive_btn.is_active();
-
-		if search_text.is_empty() {
-			log::info!("Search empty");
-			store.filter_store(
-				&|_entry: &LogEntryExt| true,
-				true,
-				crate::model_internal::VISIBLE_OFF_FILTER,
-			);
-		} else {
-			log::info!("search_changed {}", &search_text);
-			if case_sensitive {
-				store.filter_store(
-					&|entry: &LogEntryExt| entry.message.contains(&search_text),
-					true,
-					crate::model_internal::VISIBLE_OFF_FILTER,
-				);
-				store.filter_store(
-					&|entry: &LogEntryExt| !entry.message.contains(&search_text),
-					false,
-					crate::model_internal::VISIBLE_OFF_FILTER,
-				);
-			} else {
-				let search_text_lower = search_text.to_lowercase();
-				store.filter_store(
-					&|entry: &LogEntryExt| entry.message.to_lowercase().contains(&search_text_lower),
-					true,
-					crate::model_internal::VISIBLE_OFF_FILTER,
-				);
-				store.filter_store(
-					&|entry: &LogEntryExt| !entry.message.to_lowercase().contains(&search_text_lower),
-					false,
-					crate::model_internal::VISIBLE_OFF_FILTER,
-				);
-			}
-		}
-		drawing_area.queue_draw();
-	}
-
 	let search_entry = gtk::SearchEntry::new();
 	let case_sensitive_search = gtk::CheckButton::with_label("Case sensitive");
 	case_sensitive_search.set_active(false);
@@ -1255,14 +1193,14 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	let drawing_area_clone = drawing_area.clone();
 	let case_sensitive_search_clone = case_sensitive_search.clone();
 	search_entry.connect_search_changed(move |w| {
-		search_changed(w, &case_sensitive_search_clone, &mut store_rc_clone.borrow_mut(), &drawing_area_clone);
+		user_actions::search_changed(w, &case_sensitive_search_clone, &mut store_rc_clone.borrow_mut(), &drawing_area_clone);
 	});
 	
 	let store_rc_clone = store_rc.clone();
 	let drawing_area_clone = drawing_area.clone();
 	let search_entry_clone = search_entry.clone();
 	case_sensitive_search.connect_toggled(move |w| {
-		search_changed(&search_entry_clone,w, &mut store_rc_clone.borrow_mut(), &drawing_area_clone);
+		user_actions::search_changed(&search_entry_clone,w, &mut store_rc_clone.borrow_mut(), &drawing_area_clone);
 	} );
 
 	let case_sensitive_search_box = gtk::Box::new(Orientation::Horizontal, 4);
@@ -1284,10 +1222,39 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 
 	split_pane.pack1(&split_pane_left, false, false);
 
+	let last_shift = Rc::new(RefCell::new(chrono::Duration::zero()));
+
+	let mut log_sources_to_shift = Vec::new();
+	log_source_root_ext.collect_descendant_ids_of_filtered_roots(
+		&|src| matches!(src.name.as_str(), "Controller" | "Sensor" | "Probe" | "Connect Box"),
+		&mut log_sources_to_shift
+	);
+	let log_sources_to_shift = Rc::new(log_sources_to_shift);
+
+	
+
 	let timeshift_entry = gtk::Entry::new();
 	timeshift_entry.set_editable(true);
 	timeshift_entry.set_alignment(1.0); //1.0 is right-aligned
 	timeshift_entry.set_text("+0D 00:00:00.000");
+	let store_rc_clone = store_rc.clone();
+	let drawing_area_clone = drawing_area.clone();
+
+	timeshift_entry.connect_activate({
+		let last_shift = last_shift.clone();
+		let log_sources_to_shift_clone = log_sources_to_shift.clone();
+		let store_rc_clone = store_rc_clone.clone();
+		let drawing_area_clone = drawing_area_clone.clone();
+		move |entry| {
+			user_actions::timeshift_changed(
+				entry,
+				&mut store_rc_clone.borrow_mut(),
+				&drawing_area_clone,
+				last_shift.clone(),
+				log_sources_to_shift_clone.clone(),
+			);
+		}
+	});
 	let timeshift_label = gtk::Label::new(Some("Time shift:"));
 	timeshift_label.set_xalign(1.0); // right align label text
 	timeshift_label.set_size_request(120, -1);
@@ -1511,6 +1478,8 @@ fn gio_files_to_paths(gio_files: &[gio::File]) -> Vec<std::path::PathBuf> {
 	}
 	result
 }
+
+
 
 fn main() {
 	fern::Dispatch::new()

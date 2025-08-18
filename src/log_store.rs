@@ -311,4 +311,18 @@ impl LogStoreLinear {
 
 		viewport_offset_old != self.viewport_offset
 	}
+
+	pub fn shift_store_times(
+		&mut self,
+		source_ids: &[u32],
+		time_shift: chrono::Duration) 
+	{
+		for entry in self.store.iter_mut() {
+			if source_ids.contains(&entry.source_id) {
+				entry.timestamp = entry.timestamp + time_shift;
+			}
+		}
+	}
+
 }
+
