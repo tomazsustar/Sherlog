@@ -1,5 +1,5 @@
 //Uncomment the line below to hide Windows cmd console on opening the application
-//#![windows_subsystem = "windows"]
+#![windows_subsystem = "windows"]
 
 extern crate chrono;
 extern crate gtk;
@@ -1403,7 +1403,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 			{
 				let clipboard = gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD);
 
-				let mut clip_string = std::string::String::from("SesnID Date     Time UTC+0      SEV Message\r\n");
+				let mut clip_string = std::string::String::new(); //from("SesnID Date     Time UTC+0      SEV Message\r\n");
 
 				//TODO: 13.04.2020: Can optimize this, do not go through entire store
 				for (offset, entry) in store_rc_clone

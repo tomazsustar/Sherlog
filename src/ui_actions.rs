@@ -11,6 +11,8 @@ use gtk::prelude::ToggleButtonExt;
 use std::rc::Rc;
 use std::cell::RefCell;
 
+use regex::Regex;
+
 // handle search
 pub fn search_changed(
 		search_entry: &gtk::SearchEntry,
@@ -42,14 +44,17 @@ pub fn search_changed(
                 crate::model_internal::VISIBLE_OFF_FILTER,
             );
         } else {
-            let search_text_lower = search_text.to_lowercase();
+            // Build a case-insensitive regex for the search text
+            let pattern = format!("(?i){}", regex::escape(&search_text));
+            let re = Regex::new(&pattern).unwrap();
+
             store.filter_store(
-                &|entry: &LogEntryExt| entry.message.to_lowercase().contains(&search_text_lower),
+                &|entry: &LogEntryExt| re.is_match(&entry.message),
                 true,
                 crate::model_internal::VISIBLE_OFF_FILTER,
             );
             store.filter_store(
-                &|entry: &LogEntryExt| !entry.message.to_lowercase().contains(&search_text_lower),
+                &|entry: &LogEntryExt| !re.is_match(&entry.message),
                 false,
                 crate::model_internal::VISIBLE_OFF_FILTER,
             );
