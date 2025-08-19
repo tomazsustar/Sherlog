@@ -6,4 +6,7 @@ fn main() {
 		res.set_icon("icon.ico");
 		res.compile().expect("Could not compile windows resource!");
 	}
+	if std::env::var("SFILE_PASSWORD").is_err() {
+        println!("cargo:warning=SFILE_PASSWORD is not set! ZIP decryption will not work.");
+    }
 }

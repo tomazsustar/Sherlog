@@ -1,5 +1,5 @@
-//Uncomment the line below to hide Windows cmd console on opening the application
-//#![windows_subsystem = "windows"]
+// to hide console run cargo with:
+#![cfg_attr(feature = "hide_console", windows_subsystem = "windows")]
 
 extern crate chrono;
 extern crate gtk;
