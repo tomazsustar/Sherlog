@@ -8,6 +8,17 @@
 
 -------------------------------------------------------------------------------
 
+Sherlog v0.9.4 (18.08.2025) - Commit ID: 0c7c9170d03052955073a8b2e351d21641ca5b45
+
+- Adjusted clipboard formatting to the match the GUI
+- Case insensitive search
+- Time shift of Sensor and Controller logs
+
+Windows release: Sherlog-Setup-v0.9.4.exe
+SHA256: FFF4BA47FBB003A677498F0D1FAE99BAFD2F2A90FE28F2BD9183C761171AB65C
+
+-------------------------------------------------------------------------------
+
 Sherlog v0.9.3 (08.07.2024) - Commit ID: 76632e806c5e05f7cb832be7faf8b42bd124c856
 
 - Glog files: correct sensor log timestamps up to 01.01.2001
