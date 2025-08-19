@@ -10,7 +10,7 @@
 
 Sherlog v0.9.4 (18.08.2025) - Commit ID: 0c7c9170d03052955073a8b2e351d21641ca5b45
 
-- Adjusted clipboard formatting to the match the GUI
+- Adjusted clipboard formatting to match the GUI
 - Case insensitive search
 - Time shift of Sensor and Controller logs
 
