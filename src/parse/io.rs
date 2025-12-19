@@ -1,14 +1,14 @@
 use super::super::model;
 use super::glog;
+use super::robot_log;
 use super::sfile;
-
-use std::fs::File;
 
 #[derive(Debug)]
 pub enum LogParseError {
 	IoError(std::io::Error),
 	UnrecognizedFileExtension(std::ffi::OsString),
 	NoFileExtension,
+	UnrecognizedLogFile(std::path::PathBuf),
 }
 
 impl std::error::Error for LogParseError {
@@ -28,6 +28,9 @@ impl std::fmt::Display for LogParseError {
 				write!(f, "Unrecognized file extension: {}", ext.to_string_lossy())
 			}
 			LogParseError::NoFileExtension => write!(f, "No file extension"),
+			LogParseError::UnrecognizedLogFile(path) => {
+                write!(f, "File '{}' is not known log file. Parsing failed.", path.display())
+            }
 		}
 	}
 }
@@ -48,6 +51,16 @@ pub fn from_file(path: &std::path::PathBuf) -> Result<model::LogSource, LogParse
 			}
 			// ../logfiles/logfile1.sfile
 			"sfile" | "lfile" => sfile::from_file(&path).map_err(LogParseError::IoError),
+			"txt" => {
+                let file = std::fs::File::open(path)?;
+                if robot_log::is_robot_log(file) {
+                    robot_log::from_file(&path).map_err(LogParseError::IoError)
+                } else {
+                    Err(LogParseError::UnrecognizedLogFile(
+                        path.clone(),
+                    ))
+                }
+            }
 			//TODO: Implement heuristic, more file types
 			_ => Err(LogParseError::UnrecognizedFileExtension(
 				extension.to_os_string(),

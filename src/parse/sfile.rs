@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use super::super::model;
 use super::glog;
 use super::rds_log;
+use super::robot_log;
 use super::scanlib_log;
 use super::xlog;
 
@@ -92,6 +93,13 @@ pub fn from_file(path: &std::path::PathBuf) -> Result<model::LogSource, std::io:
 					};
 					client_child_sources.push(xlog::to_log_entries(file, root));
 				}
+				"txt" if file.name().ends_with("debug.txt") => {
+                    log::info!("Robot Framework log: {}", file.name());
+                    match robot_log::to_log_entries(file, "RobotFramework".to_string()) {
+                        Ok(source) => client_child_sources.push(source),
+                        Err(e) => log::warn!("Failed to parse Robot Framework log {}: {}", stem, e),
+                    }
+                }
 				_ => (),
 			}
 		}
