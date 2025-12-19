@@ -61,6 +61,16 @@ pub fn from_file(path: &std::path::PathBuf) -> Result<model::LogSource, LogParse
                     ))
                 }
             }
+			"log" => {
+                let file = std::fs::File::open(path)?;
+                if robot_log::is_robot_log(file) {
+                    robot_log::from_file(&path).map_err(LogParseError::IoError)
+                } else {
+                    Err(LogParseError::UnrecognizedLogFile(
+                        path.clone(),
+                    ))
+                }
+            }
 			//TODO: Implement heuristic, more file types
 			_ => Err(LogParseError::UnrecognizedFileExtension(
 				extension.to_os_string(),
