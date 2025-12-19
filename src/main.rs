@@ -1,4 +1,5 @@
 // to hide console run cargo with:
+// cargo build --release --features hide_console
 #![cfg_attr(feature = "hide_console", windows_subsystem = "windows")]
 
 extern crate chrono;

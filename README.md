@@ -44,7 +44,7 @@ Open a Windows console (`cmd.exe`).
 Make the newly installed binaries available in the path variable.
 
 ```sh
-SET PATH=%PATH%;C:\msys64\mingw64\bin
+SET PATH=C:\msys64\mingw64\bin;%PATH%
 ```
 
 Use `SETX` to persist this change over console and computer restarts.
@@ -53,6 +53,15 @@ SETX PATH "%PATH%"
 ```
 
 Build the project by `cd`ing to the project folder and running `cargo build`.
+
+#### Pwershell
+Open a Powershell console.
+Make the newly installed binaries available in the path variable.
+
+```sh
+$env:PATH += "C:\msys64\mingw64\bin;$env:PATH"
+```
+
 
 #### MSYS2 Mingw console
 
