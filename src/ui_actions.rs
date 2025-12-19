@@ -17,14 +17,23 @@ use regex::Regex;
 pub fn search_changed(
 		search_entry: &gtk::SearchEntry,
 		case_sensitive_btn: &gtk::CheckButton,
+        enable_btn: &gtk::CheckButton,
 		store: &mut LogStoreLinear,
 		drawing_area: &gtk::DrawingArea,
 	) {
+    let enabled = enable_btn.is_active();
     let search_text = search_entry.text().to_string();
     let case_sensitive = case_sensitive_btn.is_active();
 
-    if search_text.is_empty() {
-        log::info!("Search empty");
+    search_entry.set_sensitive(enabled);
+	case_sensitive_btn.set_sensitive(enabled);
+
+    if search_text.is_empty() || !enabled {
+        if enabled  {
+            log::info!("Search empty");
+        } else {
+            log::info!("Search disabled");
+        }
         store.filter_store(
             &|_entry: &LogEntryExt| true,
             true,

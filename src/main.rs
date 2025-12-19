@@ -1183,24 +1183,49 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	let search_entry = gtk::SearchEntry::new();
 	let case_sensitive_search = gtk::CheckButton::with_label("Case sensitive");
 	case_sensitive_search.set_active(false);
+	let search_enable = gtk::CheckButton::with_label("Enable filter");
+	search_enable.set_active(true);
 
 	let store_rc_clone = store_rc.clone();
 	let drawing_area_clone = drawing_area.clone();
 	let case_sensitive_search_clone = case_sensitive_search.clone();
+	let search_enable_clone = search_enable.clone(); // Clone BEFORE the closure
 	search_entry.connect_search_changed(move |w| {
-		ui_actions::search_changed(w, &case_sensitive_search_clone, &mut store_rc_clone.borrow_mut(), &drawing_area_clone);
+		ui_actions::search_changed(w, 
+			&case_sensitive_search_clone, 
+			&search_enable_clone,  // Use the clone in the closure
+			&mut store_rc_clone.borrow_mut(), 
+			&drawing_area_clone);
 	});
 	
 	let store_rc_clone = store_rc.clone();
 	let drawing_area_clone = drawing_area.clone();
 	let search_entry_clone = search_entry.clone();
+	let search_enable_clone = search_enable.clone(); // Now this works
 	case_sensitive_search.connect_toggled(move |w| {
-		ui_actions::search_changed(&search_entry_clone,w, &mut store_rc_clone.borrow_mut(), &drawing_area_clone);
+		ui_actions::search_changed(&search_entry_clone,
+			w, 
+			&search_enable_clone,
+			&mut store_rc_clone.borrow_mut(), 
+			&drawing_area_clone);
+	} );
+
+	let store_rc_clone = store_rc.clone();
+	let drawing_area_clone = drawing_area.clone();
+	let search_entry_clone = search_entry.clone();
+	let case_sensitive_search_clone = case_sensitive_search.clone();
+	search_enable.connect_toggled(move |w| {
+		ui_actions::search_changed(&search_entry_clone,
+			&case_sensitive_search_clone, 
+			w,
+			&mut store_rc_clone.borrow_mut(), 
+			&drawing_area_clone);
 	} );
 
 	let case_sensitive_search_box = gtk::Box::new(Orientation::Horizontal, 4);
 	split_pane_left.pack_start(&search_entry, false, false, 0);
 	case_sensitive_search_box.pack_end(&case_sensitive_search, false, false, 0);
+	case_sensitive_search_box.pack_end(&search_enable, false, false, 0);
 	split_pane_left.pack_start(&case_sensitive_search_box, false, false, 0);
 
 	let timediff_entry = gtk::Entry::new();
