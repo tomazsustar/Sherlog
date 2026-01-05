@@ -39,9 +39,12 @@ use model_internal::LogEntryExt;
 use model_internal::LogSourceContentsExt;
 use model_internal::LogSourceExt;
 
+use crate::ui_formatting::get_timezones;
+
+
 #[allow(unused_imports)]
 use gtk::{
-	ApplicationWindow, ButtonsType, CellRendererPixbuf, CellRendererText, DialogFlags, ListStore,
+	ApplicationWindow, ButtonsType, CellRendererPixbuf, CellRendererText, ComboBoxText, DialogFlags, ListStore,
 	MessageDialog, MessageType, Orientation, TreeStore, TreeView, TreeViewColumn, WindowPosition,
 };
 
@@ -370,7 +373,9 @@ fn draw(
 			ctx.show_text(&session_id.to_string()).unwrap();
 		}
 
-		let date_str = entry.timestamp.format("%d.%m.%y %T%.3f").to_string();
+		// Apply display-only timezone offset (does not affect stored UTC timestamps).
+		let ts_display = entry.timestamp + store.tz_offset;
+		let date_str = ts_display.format("%d.%m.%y %T%.3f").to_string();
 		ctx.move_to(store.border_left + 45.0, font_offset_y);
 		ctx.show_text(&date_str).unwrap();
 
@@ -899,6 +904,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 
 			scroll_perc: 0.0, //calculate dynamically
 		},
+		tz_offset: chrono::Duration::zero(),
 	};
 
 	let store_rc = Rc::new(RefCell::new(store));
@@ -1181,6 +1187,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	}
 
 	let search_entry = gtk::SearchEntry::new();
+	search_entry.set_margin_end(10);
 	let case_sensitive_search = gtk::CheckButton::with_label("Case sensitive");
 	case_sensitive_search.set_active(false);
 	let search_enable = gtk::CheckButton::with_label("Enable filter");
@@ -1226,6 +1233,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	split_pane_left.pack_start(&search_entry, false, false, 0);
 	case_sensitive_search_box.pack_end(&case_sensitive_search, false, false, 0);
 	case_sensitive_search_box.pack_end(&search_enable, false, false, 0);
+	case_sensitive_search_box.set_margin_end(10);
 	split_pane_left.pack_start(&case_sensitive_search_box, false, false, 0);
 
 	let timediff_entry = gtk::Entry::new();
@@ -1238,6 +1246,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	let timediff_box = gtk::Box::new(Orientation::Horizontal, 4);
 	timediff_box.pack_start(&timediff_label, false, false, 0);
 	timediff_box.pack_start(&timediff_entry, true, true, 0);
+	timediff_box.set_margin_end(10);
 	split_pane_left.pack_start(&timediff_box, false, false, 0);
 
 	split_pane.pack1(&split_pane_left, false, false);
@@ -1257,7 +1266,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	timeshift_entry.set_editable(true);
 	timeshift_entry.set_alignment(1.0); //1.0 is right-aligned
 	timeshift_entry.set_text("+0D 00:00:00.000");
-	timeshift_entry.set_tooltip_text(Some("Shift the timestamps of Sensor and Controller log entries."));
+	timeshift_entry.set_tooltip_text(Some("Shifts the timestamps of Sensor and Controller log entries."));
 	let store_rc_clone = store_rc.clone();
 	let drawing_area_clone = drawing_area.clone();
 
@@ -1276,15 +1285,46 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 			);
 		}
 	});
-	let timeshift_label = gtk::Label::new(Some("Time shift:"));
+	let timeshift_label = gtk::Label::new(Some("Sensor time shift:"));
 	timeshift_label.set_xalign(1.0); // right align label text
 	timeshift_label.set_size_request(120, -1);
 	let timeshift_box = gtk::Box::new(Orientation::Horizontal, 4);
 	timeshift_box.pack_start(&timeshift_label, false, false, 0);
 	timeshift_box.pack_start(&timeshift_entry, true, true, 0);
+	timeshift_box.set_margin_end(10);
 	split_pane_left.pack_start(&timeshift_box, false, false, 0);
+	
 
-	split_pane.pack1(&split_pane_left, false, false);
+	// Time zone offset (display only, relative to UTC)
+	let tz_box = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+
+	let tz_label_1 = gtk::Label::new(Some("Time zone:"));
+	tz_label_1.set_xalign(1.0); // right align label text
+	tz_label_1.set_size_request(120, -1);
+	
+	tz_box.pack_start(&tz_label_1, false, false, 0);
+
+	let tz_combo = gtk::ComboBoxText::new();
+	let timezones = get_timezones();
+	for tz in &timezones {
+		tz_combo.append_text(&tz.name);
+	}
+	tz_combo.set_active(Some(12)); // UTC at index 12
+
+	let timezones_for_combo = timezones.clone(); // Clone BEFORE using in closure
+	let store_clone = Rc::clone(&store_rc);
+	let area_clone = drawing_area.clone();
+	tz_combo.connect_changed(move |combo| {
+		if let Some(idx) = combo.active() {
+			let tz = &timezones_for_combo[idx as usize];
+			store_clone.borrow_mut().tz_offset = tz.offset;
+			area_clone.queue_draw();
+		}
+	});
+
+	tz_box.pack_start(&tz_combo, true, true, 0);
+	tz_box.set_margin_end(10);
+	split_pane_left.pack_start(&tz_box, false, false, 0);
 
 	//https://developer.gnome.org/gtk3/stable/GtkPaned.html
 
@@ -1406,7 +1446,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 
 	//https://gtk-rs.org/docs/gdk/enums/key/index.html
 	//log::info!("CODES: {} {} {} {}", gdk::keys::constants::Control_L, gdk::keys::constants::Control_R, gdk::keys::constants::Shift_L, gdk::keys::constants::Shift_R);
-	/*You should place GtkDrawArea in GtkEventBox and then doing all that stuff from GtkEventBox. As far as I remember, this is happening because there are not these events for GtkDrawArea. One in stackoverflow explained that, but only with GtkImage. I know, that GtkDrawArea in GtkEventBox works, because I am currently writing app that uses it (app is in c, but it should work for c++ too).
+	/*You should place GtkDrawArea in GtkEventBox and then doing all that stuff from GtkEventBox. As far as I remember, this is happening because there are not these events for GtkDrawArea. One in stackoverflow explained that, but only with GtkImage. I know, that GtkDrawArea in GtkEventBox works, because i am currently writing app that uses it (app is in c, but it should work for c++ too).
 	https://stackoverflow.com/questions/52171141/gtkmm-how-to-attach-keyboard-events-to-an-drawingarea*/
 	{
 		let store_rc_clone = store_rc.clone();
@@ -1452,7 +1492,9 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 							&mut clip_string,
 							"{} {} {} {}\r\n",
 							entry.session_id.map_or("      ".to_string(), |id| format!("{:<6}", id)),
-							entry.timestamp.format("%d-%m-%y %T%.6f"),
+							// Use the same display timezone offset as on screen.
+							(entry.timestamp + store_rc_clone.borrow().tz_offset)
+								.format("%d-%m-%y %T%.6f"),
 							ui_formatting::short_severity(&entry.severity),
 							entry.message
 						).unwrap();

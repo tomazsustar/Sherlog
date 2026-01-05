@@ -59,3 +59,46 @@ pub fn short_severity(sev: &LogLevel) -> &'static str {
         LogLevel::Trace => "TRC",
     }
 }
+
+// Timezone information structure
+#[derive(Clone)]
+pub struct TimezoneInfo {
+    pub name: &'static str,
+    pub offset: chrono::Duration,
+}
+
+// Common timezones with their UTC offsets (standard time, not DST)
+// Ordered with negative offsets first, UTC in the middle, then positive offsets
+pub fn get_timezones() -> Vec<TimezoneInfo> {
+    vec![
+        TimezoneInfo { name: "UTC-12:00 (Baker Island)", offset: chrono::Duration::hours(-12) },
+        TimezoneInfo { name: "UTC-11:00 (SST)", offset: chrono::Duration::hours(-11) },
+        TimezoneInfo { name: "UTC-10:00 (HST)", offset: chrono::Duration::hours(-10) },
+        TimezoneInfo { name: "UTC-09:00 (AKST)", offset: chrono::Duration::hours(-9) },
+        TimezoneInfo { name: "UTC-08:00 (PST)", offset: chrono::Duration::hours(-8) },
+        TimezoneInfo { name: "UTC-07:00 (MST/PDT)", offset: chrono::Duration::hours(-7) },
+        TimezoneInfo { name: "UTC-06:00 (CST/MDT)", offset: chrono::Duration::hours(-6) },
+        TimezoneInfo { name: "UTC-05:00 (EST/CDT)", offset: chrono::Duration::hours(-5) },
+        TimezoneInfo { name: "UTC-04:00 (AST/EDT)", offset: chrono::Duration::hours(-4) },
+        TimezoneInfo { name: "UTC-03:00 (ART/ADT)", offset: chrono::Duration::hours(-3) },
+        TimezoneInfo { name: "UTC-02:00 (BRST)", offset: chrono::Duration::hours(-2) },
+        TimezoneInfo { name: "UTC-01:00 (AZOST)", offset: chrono::Duration::hours(-1) },
+        TimezoneInfo { name: "UTC", offset: chrono::Duration::zero() },
+        TimezoneInfo { name: "UTC+01:00 (CET/WAT)", offset: chrono::Duration::hours(1) },
+        TimezoneInfo { name: "UTC+02:00 (CEST/EET)", offset: chrono::Duration::hours(2) },
+        TimezoneInfo { name: "UTC+03:00 (EEST/MSK)", offset: chrono::Duration::hours(3) },
+        TimezoneInfo { name: "UTC+04:00 (GST)", offset: chrono::Duration::hours(4) },
+        TimezoneInfo { name: "UTC+05:00 (PKT)", offset: chrono::Duration::hours(5) },
+        TimezoneInfo { name: "UTC+05:30 (IST)", offset: chrono::Duration::hours(5) + chrono::Duration::minutes(30) },
+        TimezoneInfo { name: "UTC+06:00 (BST)", offset: chrono::Duration::hours(6) },
+        TimezoneInfo { name: "UTC+07:00 (ICT)", offset: chrono::Duration::hours(7) },
+        TimezoneInfo { name: "UTC+08:00 (CST/AWST)", offset: chrono::Duration::hours(8) },
+        TimezoneInfo { name: "UTC+09:00 (JST)", offset: chrono::Duration::hours(9) },
+        TimezoneInfo { name: "UTC+09:30 (ACST)", offset: chrono::Duration::hours(9) + chrono::Duration::minutes(30) },
+        TimezoneInfo { name: "UTC+10:00 (AEST)", offset: chrono::Duration::hours(10) },
+        TimezoneInfo { name: "UTC+11:00 (AEDT/SBT)", offset: chrono::Duration::hours(11) },
+        TimezoneInfo { name: "UTC+12:00 (NZST)", offset: chrono::Duration::hours(12) },
+        TimezoneInfo { name: "UTC+13:00 (NZDT/TOT)", offset: chrono::Duration::hours(13) },
+        TimezoneInfo { name: "UTC+14:00 (LINT)", offset: chrono::Duration::hours(14) },
+    ]
+}

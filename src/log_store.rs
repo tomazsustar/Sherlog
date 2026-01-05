@@ -64,6 +64,9 @@ pub struct LogStoreLinear {
 	pub border_bottom: f64,
 	pub line_spacing: f64,
 	pub font_size: f64,
+	// Display-only timezone offset applied when formatting timestamps in the UI.
+	// This does not affect stored UTC timestamps or time-diff calculations.
+	pub tz_offset: chrono::Duration,
 }
 
 impl LogStoreLinear {
