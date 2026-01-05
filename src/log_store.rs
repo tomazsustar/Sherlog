@@ -67,6 +67,12 @@ pub struct LogStoreLinear {
 	// Display-only timezone offset applied when formatting timestamps in the UI.
 	// This does not affect stored UTC timestamps or time-diff calculations.
 	pub tz_offset: chrono::Duration,
+
+	// Current time shift value (accumulated shift applied to sensor/controller logs)
+    pub sensor_shift: chrono::Duration,
+
+    // IDs of log sources that should be shifted (e.g., Sensor, Controller, Probe, Connect Box)
+    pub log_sources_to_shift: Vec<u32>,
 }
 
 impl LogStoreLinear {
@@ -317,11 +323,10 @@ impl LogStoreLinear {
 
 	pub fn shift_store_times(
 		&mut self,
-		source_ids: &[u32],
 		time_shift: chrono::Duration) 
 	{
 		for entry in self.store.iter_mut() {
-			if source_ids.contains(&entry.source_id) {
+			if self.log_sources_to_shift.contains(&entry.source_id) {
 				entry.timestamp = entry.timestamp + time_shift;
 			}
 		}

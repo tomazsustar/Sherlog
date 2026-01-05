@@ -905,6 +905,8 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 			scroll_perc: 0.0, //calculate dynamically
 		},
 		tz_offset: chrono::Duration::zero(),
+		sensor_shift: chrono::Duration::zero(),
+		log_sources_to_shift: Vec::new(),
 	};
 
 	let store_rc = Rc::new(RefCell::new(store));
@@ -1251,14 +1253,11 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 
 	split_pane.pack1(&split_pane_left, false, false);
 
-	let last_shift = Rc::new(RefCell::new(chrono::Duration::zero()));
-
-	let mut log_sources_to_shift = Vec::new();
-	log_source_root_ext.collect_descendant_ids_of_filtered_roots(
-		&|src| matches!(src.name.as_str(), "Controller" | "Sensor" | "Probe" | "Connect Box"),
-		&mut log_sources_to_shift
-	);
-	let log_sources_to_shift = Rc::new(log_sources_to_shift);
+	// Initialize log sources to shift
+    log_source_root_ext.collect_descendant_ids_of_filtered_roots(
+        &|src| matches!(src.name.as_str(), "Controller" | "Sensor" | "Probe" | "Connect Box"),
+        &mut store_rc.borrow_mut().log_sources_to_shift
+    );
 
 	
 
@@ -1271,20 +1270,16 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	let drawing_area_clone = drawing_area.clone();
 
 	timeshift_entry.connect_activate({
-		let last_shift = last_shift.clone();
-		let log_sources_to_shift_clone = log_sources_to_shift.clone();
-		let store_rc_clone = store_rc_clone.clone();
-		let drawing_area_clone = drawing_area_clone.clone();
-		move |entry| {
-			ui_actions::timeshift_changed(
-				entry,
-				&mut store_rc_clone.borrow_mut(),
-				&drawing_area_clone,
-				last_shift.clone(),
-				log_sources_to_shift_clone.clone(),
-			);
-		}
-	});
+        let store_rc_clone = store_rc_clone.clone();
+        let drawing_area_clone = drawing_area_clone.clone();
+        move |entry| {
+            ui_actions::timeshift_changed(
+                entry,
+                &mut store_rc_clone.borrow_mut(),
+                &drawing_area_clone,
+            );
+        }
+    });
 	let timeshift_label = gtk::Label::new(Some("Sensor time shift:"));
 	timeshift_label.set_xalign(1.0); // right align label text
 	timeshift_label.set_size_request(120, -1);
@@ -1446,7 +1441,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 
 	//https://gtk-rs.org/docs/gdk/enums/key/index.html
 	//log::info!("CODES: {} {} {} {}", gdk::keys::constants::Control_L, gdk::keys::constants::Control_R, gdk::keys::constants::Shift_L, gdk::keys::constants::Shift_R);
-	/*You should place GtkDrawArea in GtkEventBox and then doing all that stuff from GtkEventBox. As far as I remember, this is happening because there are not these events for GtkDrawArea. One in stackoverflow explained that, but only with GtkImage. I know, that GtkDrawArea in GtkEventBox works, because i am currently writing app that uses it (app is in c, but it should work for c++ too).
+	/*You should place GtkDrawArea in GtkEventBox and then doing all that stuff from GtkEventBox. As far as I remember, this is happening because there are not these events for GtkDrawArea. One in stackoverflow explained that, but only with GtkImage. I know, GtkDrawArea in GtkEventBox works, because i am currently writing app that uses it (app is in c, but it should work for c++ too).
 	https://stackoverflow.com/questions/52171141/gtkmm-how-to-attach-keyboard-events-to-an-drawingarea*/
 	{
 		let store_rc_clone = store_rc.clone();

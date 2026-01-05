@@ -76,17 +76,15 @@ pub fn search_changed(
 pub fn timeshift_changed(
 entry: &gtk::Entry, 
 store: &mut LogStoreLinear,
-drawing_area: &gtk::DrawingArea, 
-last_shift: Rc<RefCell<chrono::Duration>>, 
-log_sources_to_shift: Rc<Vec<u32>>)
+drawing_area: &gtk::DrawingArea)
 {
     
     // parse time shift from timeshift_entry format "+0D 00:00:00.000"
     let timeshift_text = entry.text().to_string();
     log::info!("timeshift_changed {}", &timeshift_text);
     let time_shift = ui_formatting::parse_duration(&timeshift_text);
-    let actual_shift = time_shift - *last_shift.borrow();
-    *last_shift.borrow_mut() = time_shift;
+    let actual_shift = time_shift - store.sensor_shift;
+    store.sensor_shift = time_shift;
     // apply time shift
     
     // misuse the entry_id to remember selected
@@ -115,7 +113,7 @@ log_sources_to_shift: Rc<Vec<u32>>)
         }
     }		    
                 
-    store.shift_store_times(&log_sources_to_shift, actual_shift);
+    store.shift_store_times(actual_shift);
     store.store.sort_by(|a: &LogEntryExt, b| a.timestamp.cmp(&b.timestamp));
 
     // After sorting, find the new anchor offset
