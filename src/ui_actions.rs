@@ -8,9 +8,6 @@ use gtk::prelude::EntryExt;
 use gtk::prelude::WidgetExt;
 use gtk::prelude::ToggleButtonExt;
 
-use std::rc::Rc;
-use std::cell::RefCell;
-
 use regex::Regex;
 
 // handle search

@@ -7,3 +7,5 @@
     - show git commit:  git rev-parse HEAD
     - show sha256:  sha256sum NSIS/Sherlog-Setup-vX.Y.Z.exe
     - powerhell: Get-FileHash "NSIS/Sherlog-Setup-vX.Y.Z.exe" -Algorithm SHA256
+- Tag git repo with version number
+   
