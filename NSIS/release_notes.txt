@@ -8,6 +8,18 @@
 
 -------------------------------------------------------------------------------
 
+Sherlog v0.9.5 (05.01.2026) - Commit ID: d099be9cae47adae590e482b224b32eb15153704
+
+- Timestamp correction for Sensor logs now works when opening a single *.glog file.
+- Support for RobotFramewrork (alphatest) logs
+- Simple time zone Support
+- Checkbox to enable or disable the search filter
+
+Windows release: Sherlog-Setup-v0.9.5.exe
+SHA256: 0BFE7201EC03CC24FD8ADDB78B86F88F0F03C0AC0CF8960B43D895F78C65AE2B
+
+-------------------------------------------------------------------------------
+
 Sherlog v0.9.4 (18.08.2025) - Commit ID: 0c7c9170d03052955073a8b2e351d21641ca5b45
 
 - Adjusted clipboard formatting to match the GUI
