@@ -1186,7 +1186,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 		});
 
 		severity_box.pack_start(&check_btn, false, false, 0);
-		let check_btn = gtk::CheckButton::with_label("dbg");
+		let check_btn = gtk::CheckButton::with_label("Dbg");
 		check_btn.set_active(true);
 
 		let store_rc_clone = store_rc.clone();
