@@ -1575,6 +1575,28 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	window.add(&root_box);
 	window.show_all();
 
+	if file_path.is_some() {
+		window.set_urgency_hint(true);
+
+		// Re-trigger blinking 5 seconds after load if the window is still not focused.
+		{
+			let w = window.clone();
+			glib::timeout_add_seconds_local(5, move || {
+				if !w.is_active() {
+					w.set_urgency_hint(false);
+					w.set_urgency_hint(true);
+				}
+				glib::Continue(false)
+			});
+		}
+
+		// Always stop blinking when the user focuses the window.
+		window.connect_focus_in_event(move |w, _| {
+			w.set_urgency_hint(false);
+			gtk::Inhibit(false)
+		});
+	}
+
 	for dialog in dialog_vec {
 		dialog.run();
 		dialog.emit_close();
