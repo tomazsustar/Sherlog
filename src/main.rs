@@ -33,6 +33,7 @@ mod ui_formatting;
 mod ui_actions;
 
 use log_store::LogStoreLinear;
+use log_store::SortMode;
 use log_store::ScrollBarVert;
 
 use model_internal::LogEntryExt;
@@ -907,6 +908,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 		tz_offset: chrono::Duration::zero(),
 		sensor_shift: chrono::Duration::zero(),
 		log_sources_to_shift: Vec::new(),
+		sort_mode: SortMode::Timestamp,
 	};
 
 	let store_rc = Rc::new(RefCell::new(store));
@@ -1096,6 +1098,9 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 
 	split_pane_left.pack_start(&scrolled_window_left, true, true, 0);
 	{
+		let severity_box = gtk::Box::new(Orientation::Horizontal, 6);
+		severity_box.set_margin_end(10);
+
 		let check_btn = gtk::CheckButton::with_label("Critical");
 		check_btn.set_active(true);
 
@@ -1110,7 +1115,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 			);
 		});
 
-		split_pane_left.pack_start(&check_btn, false, false, 0);
+		severity_box.pack_start(&check_btn, false, false, 0);
 		let check_btn = gtk::CheckButton::with_label("Error");
 		check_btn.set_active(true);
 
@@ -1125,8 +1130,8 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 			);
 		});
 
-		split_pane_left.pack_start(&check_btn, false, false, 0);
-		let check_btn = gtk::CheckButton::with_label("Warning");
+		severity_box.pack_start(&check_btn, false, false, 0);
+		let check_btn = gtk::CheckButton::with_label("Warn");
 		check_btn.set_active(true);
 
 		let store_rc_clone = store_rc.clone();
@@ -1140,7 +1145,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 			);
 		});
 
-		split_pane_left.pack_start(&check_btn, false, false, 0);
+		severity_box.pack_start(&check_btn, false, false, 0);
 		let check_btn = gtk::CheckButton::with_label("Info");
 		check_btn.set_active(true);
 
@@ -1155,8 +1160,8 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 			);
 		});
 
-		split_pane_left.pack_start(&check_btn, false, false, 0);
-		let check_btn = gtk::CheckButton::with_label("Debug");
+		severity_box.pack_start(&check_btn, false, false, 0);
+		let check_btn = gtk::CheckButton::with_label("dbg");
 		check_btn.set_active(true);
 
 		let store_rc_clone = store_rc.clone();
@@ -1170,7 +1175,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 			);
 		});
 
-		split_pane_left.pack_start(&check_btn, false, false, 0);
+		severity_box.pack_start(&check_btn, false, false, 0);
 		let check_btn = gtk::CheckButton::with_label("Trace");
 		check_btn.set_active(true);
 
@@ -1185,7 +1190,8 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 			);
 		});
 
-		split_pane_left.pack_start(&check_btn, false, false, 0);
+		severity_box.pack_start(&check_btn, false, false, 0);
+		split_pane_left.pack_start(&severity_box, false, false, 0);
 	}
 
 	let search_entry = gtk::SearchEntry::new();
@@ -1289,6 +1295,25 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	timeshift_box.set_margin_end(10);
 	split_pane_left.pack_start(&timeshift_box, false, false, 0);
 	
+	let sort_box = gtk::Box::new(Orientation::Horizontal, 4);
+	let sort_label = gtk::Label::new(Some("Sort by:"));
+	sort_label.set_xalign(1.0);
+	sort_label.set_size_request(120, -1);
+	let sort_combo = gtk::ComboBoxText::new();
+	sort_combo.append_text("Timestamp");
+	sort_combo.append_text("Session ID");
+	sort_combo.set_active(Some(0));
+	{
+		let store_rc_clone = store_rc.clone();
+		let drawing_area_clone = drawing_area.clone();
+		sort_combo.connect_changed(move |combo| {
+			ui_actions::sort_changed(combo, &mut store_rc_clone.borrow_mut(), &drawing_area_clone);
+		});
+	}
+	sort_box.pack_start(&sort_label, false, false, 0);
+	sort_box.pack_start(&sort_combo, true, true, 0);
+	sort_box.set_margin_end(10);
+	split_pane_left.pack_start(&sort_box, false, false, 0);
 
 	// Time zone offset (display only, relative to UTC)
 	let tz_box = gtk::Box::new(gtk::Orientation::Horizontal, 2);
@@ -1365,10 +1390,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 		String::new(),
 	);
 
-	store_rc
-		.borrow_mut()
-		.store
-		.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+	store_rc.borrow_mut().sort_entries();
 	store_rc.borrow_mut().filter_store(
 		&|_entry: &LogEntryExt| true,
 		true,

@@ -8,6 +8,12 @@ use crate::model;
 
 use crate::model_internal::LogEntryExt;
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub enum SortMode {
+	Timestamp,
+	SessionId,
+}
+
 pub struct ScrollBarVert {
 	pub x: f64,
 	pub y: f64,
@@ -73,9 +79,30 @@ pub struct LogStoreLinear {
 
     // IDs of log sources that should be shifted (e.g., Sensor, Controller, Probe, Connect Box)
     pub log_sources_to_shift: Vec<u32>,
+
+	pub sort_mode: SortMode,
 }
 
 impl LogStoreLinear {
+	fn compare_entries(sort_mode: SortMode, a: &LogEntryExt, b: &LogEntryExt) -> std::cmp::Ordering {
+		match sort_mode {
+			SortMode::Timestamp => a
+				.timestamp
+				.cmp(&b.timestamp),
+			SortMode::SessionId => a
+				.session_id
+				.unwrap_or(u32::MAX)
+				.cmp(&b.session_id.unwrap_or(u32::MAX))
+				.then_with(|| a.timestamp.cmp(&b.timestamp)),
+		}
+	}
+
+	pub fn sort_entries(&mut self) {
+		let sort_mode = self.sort_mode;
+		self.store
+			.sort_by(|a, b| LogStoreLinear::compare_entries(sort_mode, a, b));
+	}
+
 	pub fn rel_to_abs_offset(&self, rel_offset: usize) -> Option<usize> {
 		self.store
 			.iter()

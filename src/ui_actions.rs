@@ -1,9 +1,11 @@
 // src/user_actions.rs
 
 use crate::log_store::LogStoreLinear;
+use crate::log_store::SortMode;
 use crate::ui_formatting;
 use crate::model_internal::LogEntryExt;
 
+use gtk::prelude::ComboBoxExtManual;
 use gtk::prelude::EntryExt;
 use gtk::prelude::WidgetExt;
 use gtk::prelude::ToggleButtonExt;
@@ -83,7 +85,31 @@ drawing_area: &gtk::DrawingArea)
     let actual_shift = time_shift - store.sensor_shift;
     store.sensor_shift = time_shift;
     // apply time shift
-    
+
+    store.shift_store_times(actual_shift);
+    resort_store_preserve_state(store);
+    drawing_area.queue_draw();
+    entry.set_text(&ui_formatting::format_duration(time_shift));
+}
+
+pub fn sort_changed(
+	sort_combo: &gtk::ComboBoxText,
+	store: &mut LogStoreLinear,
+	drawing_area: &gtk::DrawingArea,
+) {
+	let new_mode = match sort_combo.active() {
+		Some(1) => SortMode::SessionId,
+		_ => SortMode::Timestamp,
+	};
+
+	if store.sort_mode != new_mode {
+		store.sort_mode = new_mode;
+		resort_store_preserve_state(store);
+		drawing_area.queue_draw();
+	}
+}
+
+fn resort_store_preserve_state(store: &mut LogStoreLinear) {
     // misuse the entry_id to remember selected
     let mut selection_active = false;
     for &offset in store.selected_single.iter() {
@@ -108,10 +134,9 @@ drawing_area: &gtk::DrawingArea)
             entry.entry_id = 0xFFFFFFFF;
             anchor_marked = true;
         }
-    }		    
-                
-    store.shift_store_times(actual_shift);
-    store.store.sort_by(|a: &LogEntryExt, b| a.timestamp.cmp(&b.timestamp));
+    }
+
+    store.sort_entries();
 
     // After sorting, find the new anchor offset
     if anchor_marked {
@@ -147,6 +172,4 @@ drawing_area: &gtk::DrawingArea)
         false,
         crate::model_internal::VISIBLE_ON,
     );
-    drawing_area.queue_draw();
-    entry.set_text(&ui_formatting::format_duration(time_shift));
 }
