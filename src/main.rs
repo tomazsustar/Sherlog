@@ -701,7 +701,16 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	));
 	window.set_border_width(10);
 	window.set_position(gtk::WindowPosition::Center);
-	window.set_default_size(600, 400);
+	window.set_default_size(800, 600);
+	window.maximize();
+
+	if file_path.is_none() {
+		if let Some(path) = open_file_dialog(&window) {
+			build_ui(application, &[path]);
+			window.close();
+			return;
+		}
+	}
 
 	let pango_ctx = window.pango_context();
 	let preferred_font = pango_ctx
@@ -1071,6 +1080,22 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	//sources_tree_view.expand_all();
 
 	let split_pane = gtk::Paned::new(Orientation::Horizontal);
+	let root_box = gtk::Box::new(Orientation::Vertical, 0);
+
+	let menu_bar = gtk::MenuBar::new();
+	let open_file_menu_item = gtk::MenuItem::with_label("Open File...");
+	{
+		let window_clone = window.clone();
+		let app_clone = application.clone();
+		open_file_menu_item.connect_activate(move |_| {
+			if let Some(path) = open_file_dialog(&window_clone) {
+				build_ui(&app_clone, &[path]);
+				window_clone.close();
+			}
+		});
+	}
+	menu_bar.append(&open_file_menu_item);
+	root_box.pack_start(&menu_bar, false, false, 0);
 
 	let scrolled_window_left =
 		gtk::ScrolledWindow::new(gtk::Adjustment::NONE, gtk::Adjustment::NONE);
@@ -1545,7 +1570,9 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 		});
 	}
 
-	window.add(&split_pane);
+	root_box.pack_start(&split_pane, true, true, 0);
+	window.set_focus_on_map(false);
+	window.add(&root_box);
 	window.show_all();
 
 	for dialog in dialog_vec {
@@ -1562,6 +1589,34 @@ fn gio_files_to_paths(gio_files: &[gio::File]) -> Vec<std::path::PathBuf> {
 	result
 }
 
+fn set_wait_cursor(window: &impl glib::IsA<gtk::Window>) {
+	if let (Some(gdk_window), Some(display)) = (window.as_ref().window(), gdk::Display::default()) {
+		let cursor = gdk::Cursor::from_name(&display, "wait")
+			.or_else(|| gdk::Cursor::from_name(&display, "progress"))
+			.or_else(|| gdk::Cursor::from_name(&display, "watch"));
+		gdk_window.set_cursor(cursor.as_ref());
+		display.flush();
+	}
+}
+
+fn open_file_dialog(window: &gtk::ApplicationWindow) -> Option<std::path::PathBuf> {
+	let dialog = gtk::FileChooserDialog::new(
+		Some("Open log file"),
+		Some(window),
+		gtk::FileChooserAction::Open,
+	);
+	dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+	dialog.add_button("Open", gtk::ResponseType::Accept);
+	let response = dialog.run();
+	let path = if response == gtk::ResponseType::Accept {
+		set_wait_cursor(&dialog);
+		dialog.filename()
+	} else {
+		None
+	};
+	dialog.close();
+	path
+}
 
 
 fn main() {
