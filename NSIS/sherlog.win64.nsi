@@ -78,6 +78,8 @@ ${Operation} "${PathPrefix}\lib\gdk-pixbuf-2.0\2.10.0\loaders\"
 ${Operation} "${PathPrefix}\lib\gdk-pixbuf-2.0\2.10.0\"
 ${Operation} "${PathPrefix}\lib\gdk-pixbuf-2.0\"
 ${Operation} "${PathPrefix}\lib\"
+${Operation} "${PathPrefix}\share\glib-2.0\schemas\"
+${Operation} "${PathPrefix}\share\glib-2.0\"
 ${Operation} "${PathPrefix}\share\icons\Adwaita\"
 ${Operation} "${PathPrefix}\share\icons\hicolor\"
 ${Operation} "${PathPrefix}\share\icons\"
@@ -153,6 +155,9 @@ ${Operation} "${PathPrefix}\lib\gdk-pixbuf-2.0\2.10.0\loaders\libpixbufloader-tg
 ${Operation} "${PathPrefix}\lib\gdk-pixbuf-2.0\2.10.0\loaders\libpixbufloader-tiff.dll"
 ${Operation} "${PathPrefix}\lib\gdk-pixbuf-2.0\2.10.0\loaders\libpixbufloader-xbm.dll"
 ${Operation} "${PathPrefix}\lib\gdk-pixbuf-2.0\2.10.0\loaders\libpixbufloader-xpm.dll"
+
+SetOutPath "$INSTDIR\share\glib-2.0\schemas"
+${Operation} "${PathPrefix}\share\glib-2.0\schemas\gschemas.compiled"
 
 SetOutPath "$INSTDIR"
 !macroend

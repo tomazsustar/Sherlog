@@ -1640,6 +1640,22 @@ fn open_file_dialog(window: &gtk::ApplicationWindow) -> Option<std::path::PathBu
 	path
 }
 
+fn configure_gsettings_schema_dir() {
+	if std::env::var_os("GSETTINGS_SCHEMA_DIR").is_some() {
+		return;
+	}
+
+	if let Ok(exe_path) = std::env::current_exe() {
+		if let Some(install_root) = exe_path.parent().and_then(|bin_dir| bin_dir.parent()) {
+			let schema_dir = install_root.join("share").join("glib-2.0").join("schemas");
+			let compiled_schema = schema_dir.join("gschemas.compiled");
+			if compiled_schema.exists() {
+				std::env::set_var("GSETTINGS_SCHEMA_DIR", &schema_dir);
+			}
+		}
+	}
+}
+
 
 fn main() {
 	fern::Dispatch::new()
@@ -1663,6 +1679,7 @@ fn main() {
 
 	// https://developer.gnome.org/CommandLine/
 	// https://developer.gnome.org/GtkApplication/
+	configure_gsettings_schema_dir();
 
 	let application = gtk::Application::new(
 		Some("com.github.BenjaminRi.Sherlog"),
