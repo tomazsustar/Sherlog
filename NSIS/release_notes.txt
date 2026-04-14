@@ -8,6 +8,18 @@
 
 -------------------------------------------------------------------------------
 
+Sherlog v0.9.6 (14.04.2026) - Commit ID: dbf7048b6cc7dc91bd21049ddf41e77dba137f14
+
+- Sort logs based on session number
+- Open file when the Sherlog starts and also from within the application
+- Open Sherlog in full screen by default
+- Blink newly opened windows in the taskbar if they are not in focus
+
+Windows release: Sherlog-Setup-v0.9.6.exe
+SHA256: 74707705D61CE3D2765A556E9FE4CC6AAB12279F83D5C4920B0F6A360B2D7940
+
+-------------------------------------------------------------------------------
+
 Sherlog v0.9.5 (05.01.2026) - Commit ID: d099be9cae47adae590e482b224b32eb15153704
 
 - Timestamp correction for Sensor logs now works when opening a single *.glog file.
