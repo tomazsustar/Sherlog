@@ -30,6 +30,22 @@ Merge multiple sfiles together into the same tree
 Save interesting messages into a clue list for quick jumping between them
 Open window with loading screen and only then start parsing sfile, so user gets feedback when he double clicks a large sfile.
 
+## Performance, most gain first:
+Gains measured or estimated with a 55 MB sfile (1.8 million entries, 1.8 s until the first frame).
+
+| # | Optimization | Expected gain |
+| --- | --- | --- |
+| 1 | Show the window first, and parse, convert and sort in a background thread. GTK needs 0.8 s to show and draw the window, which can overlap with that work. | window after ~1.0 s, logs ~0.5 s sooner |
+| 2 | One parse job per glog file instead of per group. Merge the parts in ring buffer order before the time correction. | ~0.1 s |
+| 3 | Schedule parse jobs by uncompressed size times a cost per file type. Glog costs ~5x more per MB than xlog. | part of #2 |
+| 4 | Create `LogEntryExt` directly in the parsers, without converting `LogEntry` in `from_source`. | ~0.1 s, less memory |
+| 5 | Sort by merging the per-source lists, which are already mostly sorted, or sort indices instead of entries. | ~0.05 s |
+| 6 | Glog parser: read in 64 KB chunks instead of one byte per `read()` call. | ~17% of glog parse time |
+| 7 | Glog parser: find delimiters with `memchr` and take values as slices instead of copying every byte into `buf`. | up to half of glog parse time |
+| 8 | Xlog parser: reuse one line buffer (`read_line`) instead of `lines()`. | small |
+| 9 | `draw()`: set the font once per frame and avoid a `String` per date. | smoother scrolling |
+| 10 | `rel_to_abs_offset`, `abs_to_rel_offset`: skip hidden entries with `prev_offset`/`next_offset` (see above). | faster filtering on big logs |
+
 
 ## Unclear:
 Default collapse of TreeView specified by producer (Why by producer? Who is the producer?)
