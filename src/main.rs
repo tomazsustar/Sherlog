@@ -31,9 +31,12 @@ mod model;
 mod model_internal;
 mod parse;
 #[cfg(test)]
+mod perf_history;
+#[cfg(test)]
 mod perf_tests;
 #[cfg(test)]
 mod sfile_generator;
+mod startup_timing;
 mod ui_formatting;
 mod ui_actions;
 
@@ -1462,12 +1465,14 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	// https://gtk-rs.org/docs/gtk/trait.WidgetExt.html
 	let f_clone_2 = store_rc.clone();
 	drawing_area.connect_draw(move |drawing_area, ctx| {
-		draw(
+		let result = draw(
 			&mut f_clone_2.borrow_mut(),
 			drawing_area,
 			ctx,
 			preferred_font,
-		)
+		);
+		startup_timing::frame_drawn(f_clone_2.borrow().loading_text.is_none());
+		result
 	});
 
 	let f_clone_3 = store_rc.clone();
@@ -1665,6 +1670,7 @@ fn configure_gsettings_schema_dir() {
 
 
 fn main() {
+	startup_timing::init();
 	fern::Dispatch::new()
 		// Perform allocation-free log formatting
 		.format(|out, message, record| {
@@ -1688,10 +1694,13 @@ fn main() {
 	// https://developer.gnome.org/GtkApplication/
 	configure_gsettings_schema_dir();
 
-	let application = gtk::Application::new(
-		Some("com.github.BenjaminRi.Sherlog"),
-		gio::ApplicationFlags::HANDLES_OPEN,
-	);
+	// A separate instance, so the measurement does not hand the file to a running Sherlog
+	let flags = if startup_timing::enabled() {
+		gio::ApplicationFlags::HANDLES_OPEN | gio::ApplicationFlags::NON_UNIQUE
+	} else {
+		gio::ApplicationFlags::HANDLES_OPEN
+	};
+	let application = gtk::Application::new(Some("com.github.BenjaminRi.Sherlog"), flags);
 
 	// ---------------------------------------------------------------
 	// Log handling: Note that glib_sys::g_log_set_writer_func is not

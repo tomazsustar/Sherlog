@@ -316,3 +316,22 @@ pub fn generate(path: &std::path::Path, profile: &Profile) -> std::io::Result<Ex
 	zip.finish()?.flush()?;
 	Ok(expected)
 }
+
+// Generates the file into target/perf-data once, later calls reuse it. The expected counts are stored next to it.
+pub fn cached(profile: &Profile) -> (std::path::PathBuf, Expected) {
+	let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("perf-data");
+	std::fs::create_dir_all(&dir).unwrap();
+	let base = format!("{}-v{}", profile.name, GENERATOR_VERSION);
+	let path = dir.join(format!("{}.sfile", base));
+	let expected_path = dir.join(format!("{}.expected", base));
+	if let Ok(text) = std::fs::read_to_string(&expected_path) {
+		let numbers: Vec<usize> = text.split_whitespace().map(|n| n.parse().unwrap()).collect();
+		if path.exists() && numbers.len() == 2 {
+			return (path, Expected { entries: numbers[0], sensor_entries_before_2001: numbers[1] });
+		}
+	}
+	println!("Generating {} ...", path.display());
+	let expected = generate(&path, profile).unwrap();
+	std::fs::write(&expected_path, format!("{} {}", expected.entries, expected.sensor_entries_before_2001)).unwrap();
+	(path, expected)
+}
