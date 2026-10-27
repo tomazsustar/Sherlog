@@ -359,11 +359,62 @@ impl RdsLogSeverity {
 		match value {
 			"critical" | "Fatal" | "FATAL" => Some(RdsLogSeverity::Fatal), // Note the lowercase "critical", not "fatal" here!
 			"error" | "Error" | "ERROR" => Some(RdsLogSeverity::Error),
-			"warn" | "Warn" | "WARN" => Some(RdsLogSeverity::Warning),
+			"warn" | "Warn" | "WARN" | "warning" | "Warning" | "WARNING" => Some(RdsLogSeverity::Warning),
 			"info" | "Info" | "INFO" => Some(RdsLogSeverity::Info),
 			"debug" | "Debug" | "DEBUG" => Some(RdsLogSeverity::Debug),
 			"trace" | "Trace" | "TRACE" => Some(RdsLogSeverity::Trace),
 			_ => None,
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn severities(input: &str) -> Vec<model::LogLevel> {
+		let root = model::LogSource {
+			name: String::new(),
+			children: model::LogSourceContents::Entries(Vec::new()),
+		};
+		match to_log_entries(input.as_bytes(), root).children {
+			model::LogSourceContents::Entries(v) => v.into_iter().map(|e| e.severity).collect(),
+			model::LogSourceContents::Sources(_) => panic!("expected entries"),
+		}
+	}
+
+	#[test]
+	fn warning_severity_with_error_code() {
+		// Real line from Hexagon.Rds.APINet.log
+		let input = "2026-03-05 12:11:20.079|36484|warning|apinet|PushMessage - List of messages size=201\r\n\
+		             2026-03-05 12:11:20.080|36484|Warning|apinet|b\r\n\
+		             2026-03-05 12:11:20.081|36484|WARNING|apinet|c\r\n\
+		             2026-03-05 12:11:20.082|36484|warn|apinet|d\r\n";
+		assert_eq!(severities(input), vec![model::LogLevel::Warning, model::LogLevel::Warning, model::LogLevel::Warning, model::LogLevel::Warning]);
+	}
+
+	#[test]
+	fn warning_severity_without_error_code() {
+		let input = "2026-03-05 12:11:20.079|warning|apinet|a\r\n2026-03-05 12:11:20.080|WARN|apinet|b\r\n";
+		assert_eq!(severities(input), vec![model::LogLevel::Warning, model::LogLevel::Warning]);
+	}
+
+	#[test]
+	fn other_severities() {
+		let input = "2026-03-05 12:11:20.079|1|critical|s|a\r\n\
+		             2026-03-05 12:11:20.080|1|error|s|b\r\n\
+		             2026-03-05 12:11:20.081|1|info|s|c\r\n\
+		             2026-03-05 12:11:20.082|1|debug|s|d\r\n\
+		             2026-03-05 12:11:20.083|1|trace|s|e\r\n";
+		assert_eq!(
+			severities(input),
+			vec![
+				model::LogLevel::Critical,
+				model::LogLevel::Error,
+				model::LogLevel::Info,
+				model::LogLevel::Debug,
+				model::LogLevel::Trace,
+			]
+		);
 	}
 }
