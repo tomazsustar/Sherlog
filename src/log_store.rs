@@ -199,8 +199,31 @@ impl LogStoreLinear {
 		None
 	}
 
-	//pub fn filter_store(&mut self, filter : |&LogEntryExt| -> bool, active: bool) {
+	// Shows (active) or hides the entries for which `filter` is true, other entries keep their state
 	pub fn filter_store(&mut self, filter: &dyn Fn(&LogEntryExt) -> bool, active: bool, mask: u8) {
+		self.update_visibility(|entry| {
+			if filter(entry) {
+				if active {
+					entry.visible &= !mask; //remove mask to show entry
+				} else {
+					entry.visible |= mask; //apply mask
+				}
+			}
+		});
+	}
+
+	// Shows the entries for which `visible` is true and hides all others, in one pass over the store
+	pub fn set_visibility(&mut self, visible: &dyn Fn(&LogEntryExt) -> bool, mask: u8) {
+		self.update_visibility(|entry| {
+			if visible(entry) {
+				entry.visible &= !mask;
+			} else {
+				entry.visible |= mask;
+			}
+		});
+	}
+
+	fn update_visibility<F: Fn(&mut LogEntryExt)>(&mut self, update: F) {
 		//Note: The code in this function must be fast. It is critical GUI code.
 		//If this code is slow, then the user will have noticeable GUI lag.
 
@@ -275,13 +298,7 @@ impl LogStoreLinear {
 			let mut prev = &mut dummy;
 			let mut prev_offset = 0;
 			for (offset, entry) in self.store.iter_mut().enumerate() {
-				if filter(entry) {
-					if active {
-						entry.visible &= !mask; //remove mask to show entry
-					} else {
-						entry.visible |= mask; //apply mask
-					}
-				}
+				update(entry);
 				if entry.is_visible() {
 					entry.entry_id = next_entry_id;
 					next_entry_id += 1;
@@ -427,3 +444,100 @@ impl LogStoreLinear {
 
 }
 
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::model_internal::{VISIBLE_OFF_FILTER, VISIBLE_OFF_SEVERITY, VISIBLE_OFF_SOURCE, VISIBLE_ON};
+
+	fn store(visible_lines: usize, anchor: Option<usize>, viewport: usize) -> LogStoreLinear {
+		let mut store = LogStoreLinear::new();
+		store.store = (0..1000u32)
+			.map(|i| LogEntryExt {
+				timestamp: DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp_opt(i as i64, 0).unwrap(), Utc),
+				severity: match i % 4 {
+					0 => model::LogLevel::Info,
+					1 => model::LogLevel::Warning,
+					2 => model::LogLevel::Error,
+					_ => model::LogLevel::Debug,
+				},
+				session_id: None,
+				message: format!("{} {}", if i % 3 == 0 || i % 7 == 0 { "match" } else { "other" }, i % 11),
+				source_id: i % 5,
+				visible: VISIBLE_ON,
+				entry_id: 0,
+				prev_offset: 0,
+				next_offset: 0,
+			})
+			.collect();
+		store.visible_lines = visible_lines;
+		store.filter_store(&|_| true, true, VISIBLE_OFF_SOURCE);
+		store.anchor_offset = anchor;
+		store.viewport_offset = viewport;
+		store
+	}
+
+	// Everything the GUI reads after a visibility change. ID and links of hidden entries are stale and never read.
+	fn state(store: &LogStoreLinear) -> (Vec<(u8, u32, u32, u32)>, usize, usize, usize, usize) {
+		(
+			store
+				.store
+				.iter()
+				.map(|e| if e.is_visible() { (e.visible, e.entry_id, e.prev_offset, e.next_offset) } else { (e.visible, 0, 0, 0) })
+				.collect(),
+			store.entry_count,
+			store.first_offset,
+			store.last_offset,
+			store.viewport_offset,
+		)
+	}
+
+	// set_visibility gives the same result as the two filter_store passes the search used before
+	#[test]
+	fn set_visibility_equals_two_passes() {
+		let preconditions: [(&str, &dyn Fn(&mut LogStoreLinear)); 4] = [
+			("nothing hidden", &|_| ()),
+			("severity hidden", &|s| s.filter_store(&|e| e.severity == model::LogLevel::Info, false, VISIBLE_OFF_SEVERITY)),
+			("log source hidden", &|s| s.filter_store(&|e| e.source_id == 2, false, VISIBLE_OFF_SOURCE)),
+			("previous search", &|s| {
+				s.filter_store(&|e| e.message.ends_with(" 4"), true, VISIBLE_OFF_FILTER);
+				s.filter_store(&|e| !e.message.ends_with(" 4"), false, VISIBLE_OFF_FILTER);
+			}),
+		];
+		let searches: [(&str, &dyn Fn(&LogEntryExt) -> bool); 4] = [
+			("match", &|e| e.message.contains("match")),
+			("everything", &|_| true),
+			("nothing", &|_| false),
+			("number 7", &|e| e.message.ends_with(" 7")),
+		];
+		for (precondition, apply_precondition) in preconditions.iter() {
+			for (search, matches) in searches.iter() {
+				for visible_lines in [0, 10, 50, 2000] {
+					for anchor in [None, Some(0), Some(21), Some(500), Some(999)] {
+						for viewport in [0, 300, 999] {
+							let mut two_passes = store(visible_lines, anchor, viewport);
+							let mut single_pass = store(visible_lines, anchor, viewport);
+							apply_precondition(&mut two_passes);
+							apply_precondition(&mut single_pass);
+
+							two_passes.filter_store(*matches, true, VISIBLE_OFF_FILTER);
+							two_passes.filter_store(&|e| !matches(e), false, VISIBLE_OFF_FILTER);
+							single_pass.set_visibility(*matches, VISIBLE_OFF_FILTER);
+
+							assert_eq!(
+								state(&two_passes),
+								state(&single_pass),
+								"{}, search {}, {} visible lines, anchor {:?}, viewport {}",
+								precondition,
+								search,
+								visible_lines,
+								anchor,
+								viewport
+							);
+						}
+					}
+				}
+			}
+		}
+	}
+}

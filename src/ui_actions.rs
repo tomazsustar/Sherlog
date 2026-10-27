@@ -47,14 +47,8 @@ pub fn apply_search(store: &mut LogStoreLinear, search_text: &str, case_sensitiv
     } else {
         log::info!("search_changed {}", &search_text);
         if case_sensitive {
-            store.filter_store(
-                &|entry: &LogEntryExt| entry.message.contains(&search_text),
-                true,
-                crate::model_internal::VISIBLE_OFF_FILTER,
-            );
-            store.filter_store(
-                &|entry: &LogEntryExt| !entry.message.contains(&search_text),
-                false,
+            store.set_visibility(
+                &|entry: &LogEntryExt| entry.message.contains(search_text),
                 crate::model_internal::VISIBLE_OFF_FILTER,
             );
         } else {
@@ -62,14 +56,8 @@ pub fn apply_search(store: &mut LogStoreLinear, search_text: &str, case_sensitiv
             let pattern = format!("(?i){}", regex::escape(&search_text));
             let re = Regex::new(&pattern).unwrap();
 
-            store.filter_store(
+            store.set_visibility(
                 &|entry: &LogEntryExt| re.is_match(&entry.message),
-                true,
-                crate::model_internal::VISIBLE_OFF_FILTER,
-            );
-            store.filter_store(
-                &|entry: &LogEntryExt| !re.is_match(&entry.message),
-                false,
                 crate::model_internal::VISIBLE_OFF_FILTER,
             );
         }
