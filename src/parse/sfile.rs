@@ -681,3 +681,180 @@ mod tests {
 		}
 	}
 }
+
+// Timestamp correction of sensor logs, from opening the file to the corrected entries.
+// The test files are written to the temp directory and deleted afterwards.
+#[cfg(test)]
+mod time_correction_tests {
+	use super::super::datetime_utils;
+	use super::*;
+	use std::io::Write;
+
+	const T_BOOT: u64 = 621355968151283476; // 1970-01-01 00:00:15.128, before time sync
+	const T_SYNCED: u64 = 639265188101410000; // 2026-10-02 06:20:10.141
+	const DELTA_ETHERCAT: i64 = 1790921687981282700; // ns
+	const DELTA_GPTP: i64 = 1672552120214243291; // ns
+
+	fn entry(session_id: u32, ts: u64, message: &str) -> String {
+		format!("[n|{}]:[t|{}]:[e|5420000]:[s|4]:[m|{}]\r\n", session_id, ts, message)
+	}
+
+	fn ethercat(session_id: u32, ts: u64, delta: i64) -> String {
+		entry(session_id, ts, &format!("Setting EtherCAT time [delta = {} ns].", delta))
+	}
+
+	fn gptp(session_id: u32, ts: u64, delta: i64) -> String {
+		entry(session_id, ts, &format!("Setting gPTP time [delta = {} ns]", delta))
+	}
+
+	fn raw(ts: u64) -> DateTime<Utc> {
+		datetime_utils::from_100ns(ts).unwrap()
+	}
+
+	fn corrected(ts: u64, delta: i64) -> DateTime<Utc> {
+		datetime_utils::add_offset_100ns(raw(ts), delta / 100).unwrap()
+	}
+
+	// A file in the temp directory that is deleted when dropped
+	struct TempFile(PathBuf);
+
+	impl Drop for TempFile {
+		fn drop(&mut self) {
+			let _ = std::fs::remove_file(&self.0);
+		}
+	}
+
+	fn temp_path(name: &str) -> TempFile {
+		TempFile(std::env::temp_dir().join(format!("sherlog_test_{}_{}", std::process::id(), name)))
+	}
+
+	fn write_sfile(name: &str, files: &[(&str, Vec<u8>)]) -> TempFile {
+		let path = temp_path(&format!("{}.sfile", name));
+		let mut zip = zip::ZipWriter::new(std::fs::File::create(&path.0).unwrap());
+		let options = zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+		for (file_name, content) in files {
+			zip.start_file(*file_name, options).unwrap();
+			zip.write_all(content).unwrap();
+		}
+		zip.finish().unwrap();
+		path
+	}
+
+	fn child<'a>(source: &'a model::LogSource, name: &str) -> &'a model::LogSource {
+		match &source.children {
+			model::LogSourceContents::Sources(v) => v.iter().find(|s| s.name == name).unwrap_or_else(|| panic!("no source {}", name)),
+			model::LogSourceContents::Entries(_) => panic!("{} has no sub-sources", source.name),
+		}
+	}
+
+	// (message, timestamp) of the entries of a sensor log source
+	fn sensor_entries(root: &model::LogSource, board: &str, log: &str) -> Vec<(String, DateTime<Utc>)> {
+		match &child(child(child(root, "Sensor"), board), log).children {
+			model::LogSourceContents::Entries(v) => v.iter().map(|e| (e.message.clone(), e.timestamp)).collect(),
+			model::LogSourceContents::Sources(_) => panic!("{} has sub-sources", log),
+		}
+	}
+
+	fn open(name: &str, files: &[(&str, String)]) -> model::LogSource {
+		let files: Vec<(&str, Vec<u8>)> = files.iter().map(|(n, c)| (*n, c.clone().into_bytes())).collect();
+		let sfile = write_sfile(name, &files);
+		from_file(&sfile.0).unwrap()
+	}
+
+	#[test]
+	fn ethercat_one_file() {
+		let root = open(
+			"ethercat_one_file",
+			&[(
+				"telescope_LoggerAtr_1_p.glog",
+				entry(5, T_BOOT, "boot") + &ethercat(5, T_BOOT + 1, DELTA_ETHERCAT) + &entry(5, T_SYNCED, "synced"),
+			)],
+		);
+		let entries = sensor_entries(&root, "telescope", "LoggerAtr_p");
+		assert_eq!(entries[0], ("boot".to_string(), corrected(T_BOOT, DELTA_ETHERCAT)));
+		assert_eq!(entries[2], ("synced".to_string(), raw(T_SYNCED)));
+	}
+
+	#[test]
+	fn gptp_one_file() {
+		let root = open(
+			"gptp_one_file",
+			&[(
+				"telescope_LoggerAtr_1_p.glog",
+				entry(5, T_BOOT, "boot") + &gptp(5, T_BOOT + 1, DELTA_GPTP) + &entry(5, T_SYNCED, "synced"),
+			)],
+		);
+		let entries = sensor_entries(&root, "telescope", "LoggerAtr_p");
+		assert_eq!(entries[0], ("boot".to_string(), corrected(T_BOOT, DELTA_GPTP)));
+		assert_eq!(entries[2], ("synced".to_string(), raw(T_SYNCED)));
+	}
+
+	#[test]
+	fn single_glog_file() {
+		let path = temp_path("single_glog_file.glog");
+		std::fs::write(&path.0, entry(5, T_BOOT, "boot") + &gptp(5, T_BOOT + 1, DELTA_GPTP)).unwrap();
+		let source = glog::from_file(&path.0).unwrap();
+		match &source.children {
+			model::LogSourceContents::Entries(v) => assert_eq!(v[0].timestamp, corrected(T_BOOT, DELTA_GPTP)),
+			model::LogSourceContents::Sources(_) => panic!("expected entries"),
+		}
+	}
+
+	#[test]
+	fn delta_in_newer_file_corrects_older_file() {
+		// Ring buffer files: _2 is older than _1
+		let root = open(
+			"two_files",
+			&[
+				("telescope_LoggerAtr_1_p.glog", ethercat(5, T_BOOT + 2, DELTA_ETHERCAT) + &entry(5, T_SYNCED, "synced")),
+				("telescope_LoggerAtr_2_p.glog", entry(5, T_BOOT, "boot 1") + &entry(5, T_BOOT + 1, "boot 2")),
+			],
+		);
+		let entries = sensor_entries(&root, "telescope", "LoggerAtr_p");
+		let messages: Vec<&str> = entries.iter().map(|(m, _)| m.as_str()).collect();
+		assert_eq!(messages[0..2], ["boot 1", "boot 2"]);
+		assert_eq!(messages[3], "synced");
+		assert_eq!(entries[0].1, corrected(T_BOOT, DELTA_ETHERCAT));
+		assert_eq!(entries[1].1, corrected(T_BOOT + 1, DELTA_ETHERCAT));
+		assert_eq!(entries[3].1, raw(T_SYNCED));
+	}
+
+	#[test]
+	fn multiple_sessions_across_two_files() {
+		// Session 4: EtherCAT. Session 5: starts in the older file, gPTP delta in the newer file.
+		// Session 6: never synchronized, ends with a power loss. Session 7: EtherCAT.
+		let older = entry(4, T_BOOT, "session 4")
+			+ &ethercat(4, T_BOOT + 1, DELTA_ETHERCAT)
+			+ &entry(5, T_BOOT + 10, "session 5 in older file");
+		let mut newer = entry(5, T_BOOT + 11, "session 5 in newer file")
+			+ &gptp(5, T_BOOT + 12, DELTA_GPTP)
+			+ &entry(6, T_BOOT + 20, "session 6");
+		newer.push_str(&"\0".repeat(64));
+		newer.push_str(&(entry(7, T_BOOT + 30, "session 7") + &ethercat(7, T_BOOT + 31, DELTA_ETHERCAT + 1_000_000_000)));
+		let root = open(
+			"multiple_sessions",
+			&[("telescope_LoggerAtr_1_p.glog", newer), ("telescope_LoggerAtr_2_p.glog", older)],
+		);
+		let entries = sensor_entries(&root, "telescope", "LoggerAtr_p");
+		let timestamp = |message: &str| entries.iter().find(|(m, _)| m == message).unwrap_or_else(|| panic!("no entry {}", message)).1;
+		assert_eq!(timestamp("session 4"), corrected(T_BOOT, DELTA_ETHERCAT));
+		assert_eq!(timestamp("session 5 in older file"), corrected(T_BOOT + 10, DELTA_GPTP));
+		assert_eq!(timestamp("session 5 in newer file"), corrected(T_BOOT + 11, DELTA_GPTP));
+		assert_eq!(timestamp("session 6"), raw(T_BOOT + 20));
+		assert_eq!(timestamp("session 7"), corrected(T_BOOT + 30, DELTA_ETHERCAT + 1_000_000_000));
+	}
+
+	#[test]
+	fn delta_does_not_correct_other_logs() {
+		// Each log source is corrected with its own deltas, even with the same session ID
+		let root = open(
+			"other_logs",
+			&[
+				("telescope_LoggerAtr_1_p.glog", entry(5, T_BOOT, "atr") + &ethercat(5, T_BOOT + 1, DELTA_ETHERCAT)),
+				("telescope_LoggerImaging_1_p.glog", entry(5, T_BOOT, "imaging")),
+			],
+		);
+		assert_eq!(sensor_entries(&root, "telescope", "LoggerAtr_p")[0].1, corrected(T_BOOT, DELTA_ETHERCAT));
+		assert_eq!(sensor_entries(&root, "telescope", "LoggerImaging_p")[0].1, raw(T_BOOT));
+	}
+}
