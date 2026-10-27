@@ -84,14 +84,32 @@ fn perf(profile: &Profile) {
 	perf_history::record(profile.name, sfile_generator::GENERATOR_VERSION, expected.entries, &[("parse_ms", parse_ms), ("prepare_ms", prepare_ms)]);
 }
 
+// Runs the test again in its own process, because memory left by an earlier test in the same process slows it down
+fn in_own_process(test: &str, run: impl FnOnce()) {
+	if std::env::var("SHERLOG_PERF_CHILD").is_ok() {
+		run();
+		return;
+	}
+	let output = std::process::Command::new(std::env::current_exe().unwrap())
+		.args([test, "--exact", "--ignored", "--nocapture", "--test-threads=1"])
+		.env("SHERLOG_PERF_CHILD", "1")
+		.output()
+		.unwrap();
+	let stdout = String::from_utf8_lossy(&output.stdout);
+	for line in stdout.lines().filter(|line| !line.starts_with("running ") && !line.starts_with("test result:") && !line.is_empty()) {
+		println!("{}", line);
+	}
+	assert!(output.status.success(), "{} failed:\n{}{}", test, stdout, String::from_utf8_lossy(&output.stderr));
+}
+
 #[test]
 #[ignore]
 fn perf_1_typical_sfile() {
-	perf(&sfile_generator::TYPICAL);
+	in_own_process("perf_tests::perf_1_typical_sfile", || perf(&sfile_generator::TYPICAL));
 }
 
 #[test]
 #[ignore]
 fn perf_2_large_sfile() {
-	perf(&sfile_generator::LARGE);
+	in_own_process("perf_tests::perf_2_large_sfile", || perf(&sfile_generator::LARGE));
 }
