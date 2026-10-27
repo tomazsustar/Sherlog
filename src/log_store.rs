@@ -86,6 +86,70 @@ pub struct LogStoreLinear {
 }
 
 impl LogStoreLinear {
+	pub fn new() -> LogStoreLinear {
+		LogStoreLinear {
+			store: Vec::<LogEntryExt>::new(),
+			entry_count: 0,
+			first_offset: 0,
+			last_offset: 0,
+			anchor_offset: None,
+
+			show_crit: true,
+			show_err: true,
+			show_warn: true,
+			show_info: true,
+			show_dbg: true,
+			show_trace: true,
+
+			selected_single: std::collections::HashSet::new(),
+			excluded_single: std::collections::HashSet::new(),
+			selected_single_last: None,
+			selected_range: None,
+
+			pressed_shift: false,
+			pressed_ctrl: false,
+
+			log_sources: std::collections::HashMap::<u32, String>::new(),
+
+			visible_lines: 0,
+			hover_line: None,
+			viewport_offset: 0,
+			mouse_down: false,
+			thumb_drag: false,
+			thumb_drag_x: 0.0,
+			thumb_drag_y: 0.0,
+
+			border_left: 30.0,
+			border_top: 10.0,
+			border_bottom: 10.0,
+			line_spacing: 20.0,
+			font_size: 14.0,
+
+			scroll_bar: ScrollBarVert {
+				x: 0.0,
+				y: 0.0,
+
+				bar_padding: 10.0,
+				bar_width: 20.0,
+				bar_height: 0.0, //calculate dynamically
+
+				thumb_x: 0.0, //calculate dynamically
+				thumb_y: 0.0, //calculate dynamically
+				thumb_margin: 3.0,
+				thumb_width: 0.0, //calculate dynamically
+				thumb_height: 50.0,
+				thumb_rel_offset: 0.0, //calculate dynamically
+
+				scroll_perc: 0.0, //calculate dynamically
+			},
+			tz_offset: chrono::Duration::zero(),
+			sensor_shift: chrono::Duration::zero(),
+			log_sources_to_shift: Vec::new(),
+			sort_mode: SortMode::Timestamp,
+			loading_text: None,
+		}
+	}
+
 	pub fn compare_entries(sort_mode: SortMode, a: &LogEntryExt, b: &LogEntryExt) -> std::cmp::Ordering {
 		match sort_mode {
 			SortMode::Timestamp => a

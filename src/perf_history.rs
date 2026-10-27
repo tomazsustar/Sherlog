@@ -4,8 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
-pub const COLUMNS: [&str; 11] = [
+pub const COLUMNS: [&str; 14] = [
 	"date", "version", "commit", "computer", "profile", "generator", "entries", "parse_ms", "prepare_ms", "window_ms", "logs_ms",
+	"search_ms", "severity_ms", "source_ms",
 ];
 
 fn column(name: &str) -> usize {

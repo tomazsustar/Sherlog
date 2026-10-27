@@ -27,6 +27,12 @@ pub fn search_changed(
     search_entry.set_sensitive(enabled);
 	case_sensitive_btn.set_sensitive(enabled);
 
+    apply_search(store, &search_text, case_sensitive, enabled);
+    drawing_area.queue_draw();
+}
+
+// Shows only the entries whose message contains `search_text`, or all entries if the search is disabled
+pub fn apply_search(store: &mut LogStoreLinear, search_text: &str, case_sensitive: bool, enabled: bool) {
     if search_text.is_empty() || !enabled {
         if enabled  {
             log::info!("Search empty");
@@ -68,7 +74,6 @@ pub fn search_changed(
             );
         }
     }
-    drawing_area.queue_draw();
 }
 
 // handle time shift
