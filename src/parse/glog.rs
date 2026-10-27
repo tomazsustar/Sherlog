@@ -59,7 +59,11 @@ impl GlogParser {
 	}
 
 	fn read_byte(&mut self, chr: u8) {
-		self.state = match self.state {
+		self.state = self.next_state(chr);
+	}
+
+	fn next_state(&mut self, chr: u8) -> GlogParserState {
+		match self.state {
 			GlogParserState::PreSection => {
 				if chr == b'[' {
 					GlogParserState::SectionKind
@@ -137,145 +141,46 @@ impl GlogParser {
 				}
 			}
 			GlogParserState::SectionValuePost3(kind, suffix_cutoff, entry_done) => {
+				if entry_done && (chr == b'\r' || chr == b'\n' || chr == 0x00 || chr == 0xFF) {
+					// The entry ended at the line break, but no new entry follows. Instead, there is an
+					// empty line or flash padding (NUL or 0xFF bytes after a power loss). Finish the
+					// entry and skip these bytes, they do not belong to the message.
+					self.buf.push(b'[');
+					self.finish_section(kind, suffix_cutoff);
+					self.finish_entry();
+					return self.reparse(&[chr]);
+				}
 				self.buf.push(chr);
 				if chr == b'[' {
-					let value_str =
-						String::from_utf8_lossy(&self.buf[0..self.buf.len() - suffix_cutoff]);
-
-					match kind {
-						GlogSectionKind::TimestampMs => {
-							if let Ok(ts_milli) = value_str.parse::<u64>() {
-								if let Some(datetime) = datetime_utils::from_timestamp_ms(ts_milli)
-								{
-									self.log_entry.timestamp = datetime;
-								} else {
-									//TODO: Notify of invalid datetime?
-									log::warn!("MALFORMED Log ms timestamp: {}", ts_milli);
-								}
-							} else {
-								//TODO: Notify of invalid timestamp?
-								log::warn!("MALFORMED Log ms timestamp value: {}", value_str);
-							}
-						}
-						GlogSectionKind::Severity => {
-							if let Ok(glog_sev_u32) = value_str.parse::<u32>() {
-								if let Some(glog_sev) = GlogSeverity::from_u32(glog_sev_u32) {
-									self.log_entry.severity = normalize_glog_sev(glog_sev);
-								} else {
-									//TODO: Notify of invalid severity?
-									log::warn!("INVALID Log severity: {}", value_str);
-								}
-							} else {
-								//TODO: Notify of malformed severity?
-								log::warn!("MALFORMED Log severity: {}", value_str);
-							}
-						}
-						GlogSectionKind::LogSource => {
-							if let Ok(parsed_sub_source) = value_str.parse::<i32>() {
-								self.sub_source = Some(parsed_sub_source);
-							//self.log_entry.custom_fields.insert(
-							//	std::borrow::Cow::Borrowed("LogSource"),
-							//	model::CustomField::Int32(parsed_sub_source),
-							//);
-							} else {
-								//TODO: Notify of malformed sub-source?
-								log::warn!("MALFORMED Log sub-source: {}", value_str);
-							}
-						}
-						GlogSectionKind::Message => {
-							if let std::borrow::Cow::Owned(owned_str) = &value_str {
-								log::warn!("MALFORMED UTF-8 in Message: {}", owned_str);
-							}
-							self.log_entry.message = value_str.to_string();
-						}
-						GlogSectionKind::Timestamp100ns => {
-							if let Ok(gcom_datetime) = value_str.parse::<u64>() {
-								if let Some(datetime) = datetime_utils::from_100ns(gcom_datetime) {
-									self.log_entry.timestamp = datetime;
-								} else {
-									//TODO: Notify of invalid datetime?
-									log::warn!("MALFORMED Log 100ns datetime: {}", gcom_datetime);
-								}
-							} else {
-								//TODO: Notify of invalid 100ns value?
-								log::warn!("MALFORMED Log 100ns value: {}", value_str);
-							}
-						}
-						GlogSectionKind::ErrorCode => {
-							//TODO: Expose ErrorCode to user
-						}
-						GlogSectionKind::SessionId => {
-							//TODO: Handle session ID, in particular sorting
-							//with session ID instead of timestamp
-							if let Ok(parsed_session_id) = value_str.parse::<u32>() {
-								self.log_entry.custom_fields.insert(
-									std::borrow::Cow::Borrowed("SessionId"),
-									model::CustomField::UInt32(parsed_session_id),
-								);
-							} else {
-								//TODO: Notify of malformed session id?
-								log::warn!("MALFORMED Session ID: {}", value_str);
-							}
-						}
-						GlogSectionKind::Unknown => (),
-					}
-					if entry_done {
-						let log_entry = mem::replace(
-							&mut self.log_entry,
-							model::LogEntry {
+					if kind == GlogSectionKind::Message && !entry_done {
+						// A message is always the last section of an entry. If another section follows,
+						// the message value swallowed the end of an entry and the start of the next one.
+						// This happens after a garbage line or flash padding (power loss).
+						let value = &self.buf[..self.buf.len() - suffix_cutoff];
+						if let Some(entry_end) = find_entry_end(value) {
+							// The entry ended at a line break inside the value. Finish it, parse the rest again.
+							let rest = self.buf[entry_end + 1..].to_vec();
+							self.buf.truncate(entry_end);
+							self.buf.extend_from_slice(b"]\n[");
+							self.finish_section(kind, 3);
+							self.finish_entry();
+							return self.reparse(&rest);
+						} else if let Some(padding) = value.iter().position(|&b| b == 0x00 || b == 0xFF) {
+							// The entry was cut off by a power loss. Drop it, parse the rest again.
+							log::warn!("CUT OFF log message before flash padding");
+							let rest = self.buf[padding..].to_vec();
+							self.buf.clear();
+							self.log_entry = model::LogEntry {
 								..Default::default()
-							},
-						);
-						if let Some(sub_source) = self.sub_source {
-							//Log entry specified a log sub-source
-
-							//Note: We don't actually use QNX log source IDs properly
-							//All we do is prepend source string name, plus colon and space
-
-							let offset = log_entry.message.find(": ");
-							let source_name = if let Some(offset) = offset {
-								let name_slice = &log_entry.message[0..offset];
-								if !name_slice.is_empty() {
-									Some(std::borrow::Cow::from(name_slice))
-								} else {
-									None
-								}
-							} else {
-								None
-							}
-							.unwrap_or_else(|| {
-								std::borrow::Cow::from(format!("Unknown ({})", sub_source))
-							});
-
-							let source_option = self.log_sources.get_mut(source_name.as_ref());
-							if let Some(source) = source_option {
-								//Log sub-source exists, push log entry
-								let children = &mut source.children;
-								match children {
-									model::LogSourceContents::Entries(v) => {
-										v.push(log_entry);
-									}
-									_ => unreachable!(), //We only insert LogSourceContents::Entries
-								}
-							} else {
-								//Log sub-source does not yet exist
-								self.log_sources.insert(
-									source_name.to_string(),
-									model::LogSource {
-										name: source_name.to_string(),
-										children: {
-											model::LogSourceContents::Entries(vec![log_entry])
-										},
-									},
-								);
-							}
-						} else {
-							//Log entry did not specify a log sub-source
-							self.log_entries.push(log_entry);
+							};
+							self.sub_source = None;
+							return self.reparse(&rest);
 						}
-						self.sub_source = None;
 					}
-					self.buf.clear();
+					self.finish_section(kind, suffix_cutoff);
+					if entry_done {
+						self.finish_entry();
+					}
 					GlogParserState::SectionKind
 				} else if chr == b']' {
 					GlogParserState::SectionValuePost1(kind)
@@ -283,7 +188,159 @@ impl GlogParser {
 					GlogParserState::SectionValue(kind)
 				}
 			}
-		};
+		}
+	}
+
+	// Parses the value in `buf` (without the `suffix_cutoff` delimiter bytes at its end) into the current entry
+	fn finish_section(&mut self, kind: GlogSectionKind, suffix_cutoff: usize) {
+		let value_str =
+			String::from_utf8_lossy(&self.buf[0..self.buf.len() - suffix_cutoff]);
+
+		match kind {
+			GlogSectionKind::TimestampMs => {
+				if let Ok(ts_milli) = value_str.parse::<u64>() {
+					if let Some(datetime) = datetime_utils::from_timestamp_ms(ts_milli)
+					{
+						self.log_entry.timestamp = datetime;
+					} else {
+						//TODO: Notify of invalid datetime?
+						log::warn!("MALFORMED Log ms timestamp: {}", ts_milli);
+					}
+				} else {
+					//TODO: Notify of invalid timestamp?
+					log::warn!("MALFORMED Log ms timestamp value: {}", value_str);
+				}
+			}
+			GlogSectionKind::Severity => {
+				if let Ok(glog_sev_u32) = value_str.parse::<u32>() {
+					if let Some(glog_sev) = GlogSeverity::from_u32(glog_sev_u32) {
+						self.log_entry.severity = normalize_glog_sev(glog_sev);
+					} else {
+						//TODO: Notify of invalid severity?
+						log::warn!("INVALID Log severity: {}", value_str);
+					}
+				} else {
+					//TODO: Notify of malformed severity?
+					log::warn!("MALFORMED Log severity: {}", value_str);
+				}
+			}
+			GlogSectionKind::LogSource => {
+				if let Ok(parsed_sub_source) = value_str.parse::<i32>() {
+					self.sub_source = Some(parsed_sub_source);
+				//self.log_entry.custom_fields.insert(
+				//	std::borrow::Cow::Borrowed("LogSource"),
+				//	model::CustomField::Int32(parsed_sub_source),
+				//);
+				} else {
+					//TODO: Notify of malformed sub-source?
+					log::warn!("MALFORMED Log sub-source: {}", value_str);
+				}
+			}
+			GlogSectionKind::Message => {
+				if let std::borrow::Cow::Owned(owned_str) = &value_str {
+					log::warn!("MALFORMED UTF-8 in Message: {}", owned_str);
+				}
+				self.log_entry.message = value_str.to_string();
+			}
+			GlogSectionKind::Timestamp100ns => {
+				if let Ok(gcom_datetime) = value_str.parse::<u64>() {
+					if let Some(datetime) = datetime_utils::from_100ns(gcom_datetime) {
+						self.log_entry.timestamp = datetime;
+					} else {
+						//TODO: Notify of invalid datetime?
+						log::warn!("MALFORMED Log 100ns datetime: {}", gcom_datetime);
+					}
+				} else {
+					//TODO: Notify of invalid 100ns value?
+					log::warn!("MALFORMED Log 100ns value: {}", value_str);
+				}
+			}
+			GlogSectionKind::ErrorCode => {
+				//TODO: Expose ErrorCode to user
+			}
+			GlogSectionKind::SessionId => {
+				//TODO: Handle session ID, in particular sorting
+				//with session ID instead of timestamp
+				if let Ok(parsed_session_id) = value_str.parse::<u32>() {
+					self.log_entry.custom_fields.insert(
+						std::borrow::Cow::Borrowed("SessionId"),
+						model::CustomField::UInt32(parsed_session_id),
+					);
+				} else {
+					//TODO: Notify of malformed session id?
+					log::warn!("MALFORMED Session ID: {}", value_str);
+				}
+			}
+			GlogSectionKind::Unknown => (),
+		}
+		self.buf.clear();
+	}
+
+	// Adds the current entry to the log entries or its sub-source
+	fn finish_entry(&mut self) {
+		let log_entry = mem::replace(
+			&mut self.log_entry,
+			model::LogEntry {
+				..Default::default()
+			},
+		);
+		if let Some(sub_source) = self.sub_source {
+			//Log entry specified a log sub-source
+
+			//Note: We don't actually use QNX log source IDs properly
+			//All we do is prepend source string name, plus colon and space
+
+			let offset = log_entry.message.find(": ");
+			let source_name = if let Some(offset) = offset {
+				let name_slice = &log_entry.message[0..offset];
+				if !name_slice.is_empty() {
+					Some(std::borrow::Cow::from(name_slice))
+				} else {
+					None
+				}
+			} else {
+				None
+			}
+			.unwrap_or_else(|| {
+				std::borrow::Cow::from(format!("Unknown ({})", sub_source))
+			});
+
+			let source_option = self.log_sources.get_mut(source_name.as_ref());
+			if let Some(source) = source_option {
+				//Log sub-source exists, push log entry
+				let children = &mut source.children;
+				match children {
+					model::LogSourceContents::Entries(v) => {
+						v.push(log_entry);
+					}
+					_ => unreachable!(), //We only insert LogSourceContents::Entries
+				}
+			} else {
+				//Log sub-source does not yet exist
+				self.log_sources.insert(
+					source_name.to_string(),
+					model::LogSource {
+						name: source_name.to_string(),
+						children: {
+							model::LogSourceContents::Entries(vec![log_entry])
+						},
+					},
+				);
+			}
+		} else {
+			//Log entry did not specify a log sub-source
+			self.log_entries.push(log_entry);
+		}
+		self.sub_source = None;
+	}
+
+	// Parses `bytes` again, starting outside of any entry
+	fn reparse(&mut self, bytes: &[u8]) -> GlogParserState {
+		self.state = GlogParserState::PreSection;
+		for &chr in bytes {
+			self.read_byte(chr);
+		}
+		self.state
 	}
 
 	fn finalize(mut self) -> model::LogSource {
@@ -345,6 +402,13 @@ impl GlogParser {
 
 		self.root
 	}
+}
+
+// Returns the offset of the last ']' in `value` that is followed by a line break
+fn find_entry_end(value: &[u8]) -> Option<usize> {
+	(0..value.len()).rev().find(|&i| {
+		value[i] == b']' && (value[i + 1..].starts_with(b"\n") || value[i + 1..].starts_with(b"\r\n"))
+	})
 }
 
 #[derive(Copy, Clone)]
@@ -587,9 +651,6 @@ pub fn from_file(path: &std::path::PathBuf) -> Result<model::LogSource, std::io:
 // the malformed input the parser was hardened against over time: truncated entries,
 // missing line endings, garbage and flash padding (NUL / 0xFF bytes), brackets inside
 // messages, invalid field values and controller sub-sources.
-//
-// Tests marked #[ignore = "known bug: ..."] describe the correct behavior for cases the
-// parser currently gets wrong. Run them with: cargo test -- --ignored
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -763,7 +824,6 @@ mod tests {
 	}
 
 	#[test]
-	#[ignore = "known bug: an empty line between entries makes the parser lose all following entries"]
 	fn empty_lines_between_entries() {
 		let source = parse(format!("{}\r\n\r\n\r\n{}\r\n\r\n", first(), second()).as_bytes());
 		assert_eq!(messages(&source), vec!["first", "second"]);
@@ -830,11 +890,13 @@ mod tests {
 		let mut input = b"[n|5]:[t|639265188101410000]:[e|0]:[s|3]:[m|cut".to_vec();
 		input.extend(std::iter::repeat(0u8).take(16));
 		input.extend(format!("{}\r\n", sensor(6, T_BOOT, 4, "after reboot")).as_bytes());
-		assert_eq!(messages(&parse(&input)), vec!["after reboot"]);
+		assert_eq!(
+			entries(&parse(&input)),
+			vec![Entry { timestamp: ts100(T_BOOT), severity: model::LogLevel::Info, session_id: Some(6), message: "after reboot".to_string() }]
+		);
 	}
 
 	#[test]
-	#[ignore = "known bug: the entry before NUL padding is lost and the next entry gets its session ID"]
 	fn nul_padding_between_sessions() {
 		// Real pattern after power loss: the flash contains NUL bytes between the last entry of the old
 		// session and the first entry after reboot (e.g. telescope_LoggerAtr_1_p.glog: 209 NUL bytes)
@@ -851,7 +913,6 @@ mod tests {
 	}
 
 	#[test]
-	#[ignore = "known bug: the entry before 0xFF padding is lost and the next entry gets its session ID"]
 	fn ff_padding_between_sessions() {
 		let mut input = format!("{}\r\n", first()).into_bytes();
 		input.extend(std::iter::repeat(0xFFu8).take(16));
@@ -862,7 +923,6 @@ mod tests {
 	}
 
 	#[test]
-	#[ignore = "known bug: NUL padding at the end of a file drops the last entry"]
 	fn nul_padding_at_end() {
 		let mut input = format!("{}\r\n", first()).into_bytes();
 		input.extend(std::iter::repeat(0u8).take(16));
@@ -870,7 +930,6 @@ mod tests {
 	}
 
 	#[test]
-	#[ignore = "known bug: a garbage line between entries drops the entry before it"]
 	fn garbage_line_between_entries() {
 		let source = parse(format!("{}\r\nxyz\r\n{}\r\n", first(), second()).as_bytes());
 		assert_eq!(messages(&source), vec!["first", "second"]);
@@ -904,6 +963,39 @@ mod tests {
 	fn section_separator_in_message_ends_the_message() {
 		// "]\n[" inside a message is indistinguishable from the end of the entry. The rest is not a valid section.
 		assert_eq!(messages(&parse(format!("{}\r\n", sensor(5, T1, 4, "a]\n[b")).as_bytes())), vec!["a"]);
+	}
+
+	#[test]
+	fn multi_line_message_with_bracket_at_line_end() {
+		// A line inside the message ends with ']', but the message continues with text
+		let input = format!("{}
+{}
+", sensor(5, T1, 4, "list [1, 2]
+next line"), second());
+		assert_eq!(messages(&parse(input.as_bytes())), vec!["list [1, 2]
+next line", "second"]);
+	}
+
+	#[test]
+	fn garbage_line_after_controller_entry() {
+		let source = parse(b"[tq|000001790853428348]:[s|4]:[i|13]:[m|Name: a]
+xyz
+[tq|000001790853428349]:[s|4]:[m|no source]
+");
+		let sub_sources = sub_sources(&source);
+		assert_eq!(sub_sources.len(), 2);
+		assert_eq!((sub_sources[0].0.as_str(), sub_sources[0].1[0].message.as_str()), ("Name", "Name: a"));
+		assert_eq!((sub_sources[1].0.as_str(), sub_sources[1].1[0].message.as_str()), ("Unknown (None)", "no source"));
+	}
+
+	#[test]
+	fn cut_off_controller_entry_before_padding() {
+		// The sub-source of the cut off entry must not leak into the entry after the padding
+		let mut input = b"[tq|000001790853428348]:[s|4]:[i|13]:[m|Name: cut".to_vec();
+		input.extend(std::iter::repeat(0u8).take(16));
+		input.extend(b"[tq|000001790853428349]:[s|4]:[m|after reboot]
+");
+		assert_eq!(messages(&parse(&input)), vec!["after reboot"]);
 	}
 
 	// Invalid fields -----------------------------------------------------------------
