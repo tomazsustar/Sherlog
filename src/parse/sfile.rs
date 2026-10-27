@@ -14,7 +14,6 @@ use super::scanlib_log;
 use super::xlog;
 
 use std::collections::HashMap;
-use std::mem;
 
 static SFILE_PASSWORD: Option<&'static str> = option_env!("SFILE_PASSWORD");
 
@@ -22,20 +21,14 @@ pub fn from_file(path: &std::path::PathBuf) -> Result<model::LogSource, std::io:
 	let file = std::fs::File::open(&path)?;
 	let mut archive = zip::ZipArchive::new(file)?;
 
+	// Classify the archive entries by their names only. Only known log files become parse jobs,
+	// all other files are never decompressed.
+	let mut jobs = Vec::new();
 	let mut glog_files = Vec::new();
 
-	let mut client_child_sources = Vec::new();
-	let mut rds_child_sources = Vec::new();
-	let mut scanlib_child_sources = Vec::new();
-	let mut child_sources = Vec::new();
-	child_sources.reserve(archive.len());
-
 	for i in 0..archive.len() {
-		let file = if let Some(password) = SFILE_PASSWORD {
-			archive.by_index_decrypt(i, password.as_bytes())?.unwrap() //TODO: 21.06.2020: Handle InvalidPassword!
-		} else {
-			archive.by_index(i)?
-		};
+		let file = archive.by_index_raw(i)?;
+		let compressed_size = file.compressed_size();
 		let outpath = PathBuf::from(file.name());
 		let stem = outpath.file_stem().unwrap();
 		let stem = stem.to_string_lossy();
@@ -49,25 +42,14 @@ pub fn from_file(path: &std::path::PathBuf) -> Result<model::LogSource, std::io:
 			if let Some(extension) = outpath.extension() {
 				match extension.to_string_lossy().as_ref() {
 					"log" => {
-						if stem.starts_with("ScanLib_") {
+						let kind = if stem.starts_with("ScanLib_") {
 							log::info!("Log file (ScanLib): {}", &stem);
-							let root = model::LogSource {
-								name: stem.to_string(),
-								children: {
-									model::LogSourceContents::Entries(Vec::<model::LogEntry>::new())
-								},
-							};
-							scanlib_child_sources.push(scanlib_log::to_log_entries(file, root));
+							ParseJobKind::ScanLib
 						} else {
 							log::info!("Log file (RDS): {}", &stem);
-							let root = model::LogSource {
-								name: stem.to_string(),
-								children: {
-									model::LogSourceContents::Entries(Vec::<model::LogEntry>::new())
-								},
-							};
-							rds_child_sources.push(rds_log::to_log_entries(file, root));
-						}
+							ParseJobKind::Rds
+						};
+						jobs.push(ParseJob::single(kind, stem.to_string(), i, compressed_size));
 					}
 					unknown_extension => {
 						log::warn!("Unknown extension in RDS folder: {}", unknown_extension)
@@ -81,27 +63,90 @@ pub fn from_file(path: &std::path::PathBuf) -> Result<model::LogSource, std::io:
 						name: stem.to_string(),
 						group_name: get_group_name(&stem),
 						index: i,
+						compressed_size,
 					});
 				}
 				"xlog" => {
 					//log::info!("XLOG: {}", &stem);
-					let root = model::LogSource {
-						name: stem.to_string(),
-						children: {
-							model::LogSourceContents::Entries(Vec::<model::LogEntry>::new())
-						},
-					};
-					client_child_sources.push(xlog::to_log_entries(file, root));
+					jobs.push(ParseJob::single(ParseJobKind::Xlog, stem.to_string(), i, compressed_size));
 				}
 				"log" if file.name().contains("robot") => {
-                    log::info!("Robot Framework log: {}", file.name());
-                    match robot_log::to_log_entries(file, "RobotFramework".to_string()) {
-                        Ok(source) => client_child_sources.push(source),
-                        Err(e) => log::warn!("Failed to parse Robot Framework log {}: {}", stem, e),
-                    }
-                }
+					log::info!("Robot Framework log: {}", file.name());
+					jobs.push(ParseJob::single(ParseJobKind::Robot, stem.to_string(), i, compressed_size));
+				}
 				_ => (),
 			}
+		}
+	}
+
+	//Sort glog files by group (a group is the file name with its ring buffer ID / overview suffix removed)
+	//Inside a group, reverse sort by file name (and thus buffer ID) to get chronological ordering of files.
+	//The reason for this is that higher ring buffer ID means the file is older. Older log entries come first.
+	//Note: Overview logs are interspersed with normal logs, therefore no chronological order between
+	//the log entries of normal logs and overview logs can be established without inspecting timestamps.
+	//Note: Sensor has logSync and logAsync, leading to minor violations of chronological order inside a file
+	//and even e.g. between the end of one file and the start of another.
+	//Due to these facts, this ordering is only mostly chronological with regards to individual log entries.
+	//This chronological ordering is required to perform timestamp corrections for devices that do not have
+	//a real-time clock and thus start with 1970 timestamps on boot-up before distributed clock time is set.
+	//It is also required to preserve the order of log entries that were logged with the exact same timestamp.
+	//
+	//Example ordering:
+	//Group name           File name
+	//--------------------------------------
+	//adm_LoggerAdm_p      adm_LoggerAdm_2_p
+	//adm_LoggerAdm_p      adm_LoggerAdm_1_p
+	//adm_LoggerAdm_v      adm_LoggerAdm_1_v
+	//contr_FtcManager     contr_FtcManager_ov
+	//contr_FtcManager     contr_FtcManager
+	//contr_Hwa            contr_Hwa_4
+	//contr_Hwa            contr_Hwa_3
+	//contr_Hwa            contr_Hwa_2
+	//contr_Hwa            contr_Hwa_1
+	//contr_Hwa            contr_Hwa
+	//
+	//Note the sorting subtleties, especially with _p and _v logs, where the ID is not a suffix.
+
+	glog_files.sort_unstable_by(|a, b| {
+		a.group_name
+			.cmp(&b.group_name)
+			.then(a.name.cmp(&b.name).reverse())
+	});
+
+	// Each glog group becomes one job that reads the group's files as one concatenated stream
+	for file in glog_files {
+		let is_new_group = match jobs.last() {
+			Some(job) => job.kind != ParseJobKind::Glog || job.name != file.group_name,
+			None => true,
+		};
+		if is_new_group {
+			log::info!("--------------------");
+			log::info!("Glog file: {:?}", file);
+			jobs.push(ParseJob {
+				kind: ParseJobKind::Glog,
+				name: file.group_name,
+				indices: std::collections::VecDeque::new(),
+				compressed_size: 0,
+			});
+		} else {
+			log::info!("Glog file: {:?}", file);
+		}
+		let job = jobs.last_mut().unwrap();
+		job.indices.push_back(file.index);
+		job.compressed_size += file.compressed_size;
+	}
+
+	// Decompress and parse all jobs in parallel. The results come back in job order.
+	let mut client_child_sources = Vec::new();
+	let mut rds_child_sources = Vec::new();
+	let mut scanlib_child_sources = Vec::new();
+	let mut child_sources = Vec::new();
+	for (kind, source) in parse_jobs_parallel(path, &jobs)? {
+		match kind {
+			ParseJobKind::Xlog | ParseJobKind::Robot => client_child_sources.push(source),
+			ParseJobKind::Rds => rds_child_sources.push(source),
+			ParseJobKind::ScanLib => scanlib_child_sources.push(source),
+			ParseJobKind::Glog => child_sources.push(source),
 		}
 	}
 
@@ -185,71 +230,6 @@ pub fn from_file(path: &std::path::PathBuf) -> Result<model::LogSource, std::io:
 	let mut client_child_sources = Vec::new();
 	for (_, sub_source) in client_log_sources {
 		client_child_sources.push(sub_source);
-	}
-
-	//Sort glog files by group (a group is the file name with its ring buffer ID / overview suffix removed)
-	//Inside a group, reverse sort by file name (and thus buffer ID) to get chronological ordering of files.
-	//The reason for this is that higher ring buffer ID means the file is older. Older log entries come first.
-	//Note: Overview logs are interspersed with normal logs, therefore no chronological order between
-	//the log entries of normal logs and overview logs can be established without inspecting timestamps.
-	//Note: Sensor has logSync and logAsync, leading to minor violations of chronological order inside a file
-	//and even e.g. between the end of one file and the start of another.
-	//Due to these facts, this ordering is only mostly chronological with regards to individual log entries.
-	//This chronological ordering is required to perform timestamp corrections for devices that do not have
-	//a real-time clock and thus start with 1970 timestamps on boot-up before distributed clock time is set.
-	//It is also required to preserve the order of log entries that were logged with the exact same timestamp.
-	//
-	//Example ordering:
-	//Group name           File name
-	//--------------------------------------
-	//adm_LoggerAdm_p      adm_LoggerAdm_2_p
-	//adm_LoggerAdm_p      adm_LoggerAdm_1_p
-	//adm_LoggerAdm_v      adm_LoggerAdm_1_v
-	//contr_FtcManager     contr_FtcManager_ov
-	//contr_FtcManager     contr_FtcManager
-	//contr_Hwa            contr_Hwa_4
-	//contr_Hwa            contr_Hwa_3
-	//contr_Hwa            contr_Hwa_2
-	//contr_Hwa            contr_Hwa_1
-	//contr_Hwa            contr_Hwa
-	//
-	//Note the sorting subtleties, especially with _p and _v logs, where the ID is not a suffix.
-
-	glog_files.sort_unstable_by(|a, b| {
-		a.group_name
-			.cmp(&b.group_name)
-			.then(a.name.cmp(&b.name).reverse())
-	});
-
-	let mut deque = std::collections::VecDeque::new();
-	let mut last_group = "".to_string();
-	for file in glog_files {
-		if last_group != file.group_name {
-			if !deque.is_empty() {
-				let deque = mem::replace(&mut deque, std::collections::VecDeque::new());
-				let reader = ConcatZipReader::new(&mut archive, deque);
-				let root = model::LogSource {
-					name: last_group,
-					children: { model::LogSourceContents::Entries(Vec::<model::LogEntry>::new()) },
-				};
-				child_sources.push(glog::to_log_entries(reader, root));
-			}
-			log::info!("--------------------");
-			log::info!("Glog file: {:?}", file);
-			last_group = file.group_name;
-		} else {
-			log::info!("Glog file: {:?}", file);
-		}
-		deque.push_back(file.index);
-	}
-	if !deque.is_empty() {
-		let deque = mem::replace(&mut deque, std::collections::VecDeque::new());
-		let reader = ConcatZipReader::new(&mut archive, deque);
-		let root = model::LogSource {
-			name: last_group,
-			children: { model::LogSourceContents::Entries(Vec::<model::LogEntry>::new()) },
-		};
-		child_sources.push(glog::to_log_entries(reader, root));
 	}
 
 	let mut contr_child_sources = Vec::new();
@@ -447,13 +427,7 @@ impl<'a, R: std::io::Read + std::io::Seek> std::io::Read for ConcatZipReader<'a,
 				match self.indices.pop_front() {
 					Some(idx) => {
 						//Need to open new file
-						let f = if let Some(password) = SFILE_PASSWORD {
-							self.archive
-								.by_index_decrypt(idx, password.as_bytes())?
-								.unwrap() //TODO: 21.06.2020: Handle InvalidPassword!
-						} else {
-							self.archive.by_index(idx)?
-						};
+						let f = open_entry(self.archive, idx)?;
 						unsafe {
 							//Due to the fact that file references archive and both are in the same struct,
 						 //this cannot be done in safe Rust
@@ -480,6 +454,141 @@ struct ZipEntry {
 	name: String,
 	group_name: String,
 	index: usize,
+	compressed_size: u64,
+}
+
+fn open_entry<R: std::io::Read + std::io::Seek>(
+	archive: &mut zip::ZipArchive<R>,
+	index: usize,
+) -> Result<zip::read::ZipFile<'_>, std::io::Error> {
+	if let Some(password) = SFILE_PASSWORD {
+		Ok(archive.by_index_decrypt(index, password.as_bytes())?.unwrap()) //TODO: 21.06.2020: Handle InvalidPassword!
+	} else {
+		Ok(archive.by_index(index)?)
+	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ParseJobKind {
+	Xlog,
+	Robot,
+	Rds,
+	ScanLib,
+	Glog,
+}
+
+// A log source to be parsed from one or more archive entries
+#[derive(Debug)]
+struct ParseJob {
+	kind: ParseJobKind,
+	name: String,
+	indices: std::collections::VecDeque<usize>, //Archive entries, read as one concatenated stream
+	compressed_size: u64,                       //Used to schedule big jobs first
+}
+
+impl ParseJob {
+	fn single(kind: ParseJobKind, name: String, index: usize, compressed_size: u64) -> ParseJob {
+		ParseJob {
+			kind,
+			name,
+			indices: std::collections::VecDeque::from(vec![index]),
+			compressed_size,
+		}
+	}
+}
+
+fn parse_job<R: std::io::Read + std::io::Seek>(
+	archive: &mut zip::ZipArchive<R>,
+	job: &ParseJob,
+) -> Result<Option<model::LogSource>, std::io::Error> {
+	let root = model::LogSource {
+		name: job.name.clone(),
+		children: { model::LogSourceContents::Entries(Vec::<model::LogEntry>::new()) },
+	};
+	if job.kind == ParseJobKind::Glog {
+		let reader = ConcatZipReader::new(archive, job.indices.clone());
+		return Ok(Some(glog::to_log_entries(reader, root)));
+	}
+	let file = open_entry(archive, job.indices[0])?;
+	let source = match job.kind {
+		ParseJobKind::Xlog => xlog::to_log_entries(file, root),
+		ParseJobKind::Rds => rds_log::to_log_entries(file, root),
+		ParseJobKind::ScanLib => scanlib_log::to_log_entries(file, root),
+		ParseJobKind::Robot => match robot_log::to_log_entries(file, "RobotFramework".to_string()) {
+			Ok(source) => source,
+			Err(e) => {
+				log::warn!("Failed to parse Robot Framework log {}: {}", job.name, e);
+				return Ok(None);
+			}
+		},
+		ParseJobKind::Glog => unreachable!(),
+	};
+	Ok(Some(source))
+}
+
+// Parsing is limited by memory allocation and bandwidth, so more threads than this make it slower
+const MAX_PARSE_THREADS: usize = 8;
+
+// Parses all jobs on up to MAX_PARSE_THREADS CPU cores. Each thread opens its own handle to the archive.
+// Returns the parsed sources in job order; jobs that produced no source are left out.
+fn parse_jobs_parallel(
+	path: &std::path::Path,
+	jobs: &[ParseJob],
+) -> Result<Vec<(ParseJobKind, model::LogSource)>, std::io::Error> {
+	use std::sync::atomic::{AtomicUsize, Ordering};
+
+	// Biggest jobs first, so that no big job is started last and delays the end
+	let mut schedule: Vec<usize> = (0..jobs.len()).collect();
+	schedule.sort_by_key(|&i| std::cmp::Reverse(jobs[i].compressed_size));
+
+	let thread_count = std::thread::available_parallelism()
+		.map_or(1, |n| n.get())
+		.min(MAX_PARSE_THREADS)
+		.min(jobs.len())
+		.max(1);
+	let next = AtomicUsize::new(0);
+
+	let thread_results: Vec<Result<Vec<(usize, Option<model::LogSource>)>, std::io::Error>> =
+		std::thread::scope(|scope| {
+			let handles: Vec<_> = (0..thread_count)
+				.map(|_| {
+					scope.spawn(|| -> Result<Vec<(usize, Option<model::LogSource>)>, std::io::Error> {
+						let mut archive = zip::ZipArchive::new(std::fs::File::open(path)?)?;
+						let mut parsed = Vec::new();
+						loop {
+							let n = next.fetch_add(1, Ordering::Relaxed);
+							if n >= schedule.len() {
+								return Ok(parsed);
+							}
+							let job_index = schedule[n];
+							match parse_job(&mut archive, &jobs[job_index]) {
+								Ok(source) => parsed.push((job_index, source)),
+								Err(e) => {
+									next.store(schedule.len(), Ordering::Relaxed); //Stop the other threads
+									return Err(e);
+								}
+							}
+						}
+					})
+				})
+				.collect();
+			handles
+				.into_iter()
+				.map(|handle| handle.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+				.collect()
+		});
+
+	let mut sources: Vec<Option<model::LogSource>> = (0..jobs.len()).map(|_| None).collect();
+	for thread_result in thread_results {
+		for (job_index, source) in thread_result? {
+			sources[job_index] = source;
+		}
+	}
+	Ok(jobs
+		.iter()
+		.zip(sources)
+		.filter_map(|(job, source)| source.map(|source| (job.kind, source)))
+		.collect())
 }
 
 fn get_group_name(s: &str) -> String {
