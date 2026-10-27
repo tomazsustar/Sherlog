@@ -1,5 +1,6 @@
 - Increase crate version, build project again (also add Cargo.lock) and commit in git repo
 - Set sfile password environment variable
+- Run the tests: `cargo test --release`. Put sample sfiles into test/ first, they are not in git.
 - recompile with: `cargo build --release --features hide_console` to hide the console
 - Run NSIS to create a release installer
 - Test installer, in particular, remove C:\msys64\mingw64\bin from the PATH variable and make sure that the program finds all its dynamic libraries and runs properly
