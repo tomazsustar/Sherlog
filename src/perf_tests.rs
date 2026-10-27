@@ -88,7 +88,7 @@ fn computer() -> String {
 		.unwrap_or_else(|_| "unknown".to_string())
 }
 
-// Short hash of HEAD, with "-dirty" if tracked files have changes
+// Short hash of HEAD, with "-dirty" if tracked files other than the results have changes
 fn commit() -> String {
 	let git = |args: &[&str]| {
 		std::process::Command::new("git")
@@ -99,7 +99,7 @@ fn commit() -> String {
 			.unwrap_or_default()
 	};
 	let hash = git(&["rev-parse", "--short", "HEAD"]);
-	if git(&["status", "--porcelain", "--untracked-files=no"]).is_empty() {
+	if git(&["status", "--porcelain", "--untracked-files=no", "--", ".", ":!NSIS/performance_history.csv"]).is_empty() {
 		hash
 	} else {
 		hash + "-dirty"
