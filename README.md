@@ -59,7 +59,7 @@ Open a Powershell console.
 Make the newly installed binaries available in the path variable.
 
 ```sh
-$env:PATH += "C:\msys64\mingw64\bin;$env:PATH"
+$env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
 ```
 
 
