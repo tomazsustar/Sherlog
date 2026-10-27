@@ -1351,19 +1351,36 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 
 	let tz_combo = gtk::ComboBoxText::new();
 	let timezones = get_timezones();
-	for tz in &timezones {
-		tz_combo.append_text(&tz.name);
+	let utc_index = timezones.iter().position(|tz| tz.offset.is_zero()).unwrap();
+
+	// GTK measures every entry of a combo box when the window is shown.
+	// So the window is shown with UTC only, and the other time zones are added once it is visible.
+	tz_combo.append_text(&timezones[utc_index].name);
+	tz_combo.set_active(Some(0));
+	{
+		let tz_combo = tz_combo.clone();
+		let timezones = timezones.clone();
+		glib::idle_add_local_once(move || {
+			for (i, tz) in timezones.iter().enumerate() {
+				if i < utc_index {
+					tz_combo.insert_text(i as i32, &tz.name);
+				} else if i > utc_index {
+					tz_combo.append_text(&tz.name);
+				}
+			}
+		});
 	}
-	tz_combo.set_active(Some(12)); // UTC at index 12
 
 	let timezones_for_combo = timezones.clone(); // Clone BEFORE using in closure
 	let store_clone = Rc::clone(&store_rc);
 	let area_clone = drawing_area.clone();
 	tz_combo.connect_changed(move |combo| {
-		if let Some(idx) = combo.active() {
-			let tz = &timezones_for_combo[idx as usize];
-			store_clone.borrow_mut().tz_offset = tz.offset;
-			area_clone.queue_draw();
+		// Look up by name, the list is not complete until the window is visible
+		if let Some(name) = combo.active_text() {
+			if let Some(tz) = timezones_for_combo.iter().find(|tz| tz.name == name.as_str()) {
+				store_clone.borrow_mut().tz_offset = tz.offset;
+				area_clone.queue_draw();
+			}
 		}
 	});
 
