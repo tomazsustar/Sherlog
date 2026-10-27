@@ -1,7 +1,6 @@
 extern crate chrono;
 
 use chrono::prelude::*;
-use std::collections::HashMap;
 use std::fmt;
 
 #[allow(dead_code)]
@@ -32,26 +31,11 @@ impl fmt::Display for LogLevel {
 	}
 }
 
-#[allow(dead_code)]
-pub enum CustomField {
-	Int64(i64),
-	Int32(i32),
-	Int16(i16),
-	Int8(i8),
-	UInt64(u64),
-	UInt32(u32),
-	UInt16(u16),
-	UInt8(u8),
-	Float32(f32),
-	Float64(f64),
-	String(String),
-}
-
 pub struct LogEntry {
 	pub timestamp: chrono::DateTime<Utc>,
 	pub severity: LogLevel,
+	pub session_id: Option<u32>, //sensor logs only
 	pub message: String,
-	pub custom_fields: HashMap<std::borrow::Cow<'static, str>, CustomField>,
 }
 
 pub enum LogSourceContents {
@@ -72,8 +56,8 @@ impl Default for LogEntry {
 				Utc,
 			),
 			severity: LogLevel::Error,
+			session_id: None,
 			message: "".to_string(),
-			custom_fields: HashMap::new(),
 		}
 	}
 }

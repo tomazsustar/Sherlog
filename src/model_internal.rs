@@ -67,18 +67,10 @@ impl LogSourceExt {
 			model::LogSourceContents::Entries(v) => LogSourceContentsExt::Entries(
 				v.into_iter()
 					.map(move |entry| {
-						let session_id = entry.custom_fields.get("SessionId").and_then(|custom_field| {
-								// If the "SessionId" field exists in the HashMap, attempt to extract the value and convert it to `Option<u32>`
-								match custom_field {
-									model::CustomField::UInt32(value) => Some(*value),
-									_ => None, // Return None for other variants or if the key doesn't exist
-								}
-						});
-
 						LogEntryExt {
 							timestamp: entry.timestamp,
 							severity: entry.severity,
-							session_id: session_id,
+							session_id: entry.session_id,
 							message: remove_nul_bytes(entry.message),
 							source_id: 0,
 							visible: VISIBLE_ON,
