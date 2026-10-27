@@ -7,6 +7,8 @@ use std::io::BufReader;
 use std::io::Read;
 use std::mem;
 use chrono::{DateTime, NaiveDateTime, Utc};
+use regex::Regex;
+use std::sync::LazyLock;
 
 // GLOG parser ----------------------------------------------------------------------
 
@@ -419,6 +421,26 @@ enum GlogSectionKind {
 	Unknown,
 }
 
+// Some log entries say:
+// Setting EtherCAT time [delta = 1562060032100954112 ns].
+// Others say (omitting the dot):
+// Setting EtherCAT time [delta = 1562060032100954112 ns]
+// Other time sources (e.g. gPTP) use the same format:
+// Setting gPTP time [delta = 1672552120214243291 ns]
+static TIME_DELTA_RE: LazyLock<Regex> =
+	LazyLock::new(|| Regex::new(r"^Setting \S+ time \[delta = (-?\d+) ns\]\.?$").unwrap());
+
+// Returns the delta string if `message` is a time delta log entry.
+fn time_delta(message: &str) -> Option<&str> {
+	// Cheap pre-check so the regex only runs on candidate lines
+	if !message.starts_with("Setting ") {
+		return None;
+	}
+	TIME_DELTA_RE
+		.captures(message)
+		.map(|captures| captures.get(1).unwrap().as_str())
+}
+
 pub fn adjust_sensor_timestamps(source: &mut model::LogSource) {
 	match &mut source.children {
 		model::LogSourceContents::Sources(v) => {
@@ -439,20 +461,12 @@ pub fn adjust_sensor_timestamps(source: &mut model::LogSource) {
 			for entry in v.iter_mut().rev() {
 				if let Some(field) = entry.custom_fields.get("SessionId") {
 					if let model::CustomField::UInt32(session_id) = field {
-						// Some log entries say:
-						// Setting EtherCAT time [delta = 1562060032100954112 ns].
-						// Others say (omitting the dot):
-						// Setting EtherCAT time [delta = 1562060032100954112 ns]
-						// We need to handle both...
-						if entry.message.starts_with("Setting EtherCAT time [delta = ")
-							&& (entry.message.ends_with(" ns].") || entry.message.ends_with(" ns]"))
-						{
+						if let Some(delta) = time_delta(&entry.message) {
 							//log::info!(
 							//	"Found EtherCAT time correction entry: session: {}, msg: {}",
 							//	session_id,
 							//	entry.message
 							//);
-							let delta = entry.message.split(' ').nth(5).unwrap(); //we can unwrap here because we verified the format above
 							if let Ok(delta) = delta.parse::<i64>() {
 								let old_correction = mem::replace(
 									&mut active_correction,
@@ -493,7 +507,7 @@ pub fn adjust_sensor_timestamps(source: &mut model::LogSource) {
 									//);
 								}
 							} else {
-								log::warn!("could not parse EtherCAT timestamp {}", delta);
+								log::warn!("could not parse time delta {}", delta);
 								active_correction = None;
 							}
 						} else {
