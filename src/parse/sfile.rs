@@ -633,9 +633,16 @@ mod tests {
 		}
 	}
 
+	fn is_password_required(e: &std::io::Error) -> bool {
+		matches!(
+			e.get_ref().and_then(|e| e.downcast_ref::<zip::result::ZipError>()),
+			Some(zip::result::ZipError::UnsupportedArchive(message)) if *message == zip::result::ZipError::PASSWORD_REQUIRED
+		)
+	}
+
 	// Opens every sfile/lfile in the local test/ directory and measures the time.
 	// The sample files are not committed (see .gitignore), so the test passes without checking anything when there are none.
-	// Encrypted files require SFILE_PASSWORD to be set at build time.
+	// Encrypted files are skipped unless SFILE_PASSWORD was set at build time.
 	// Run with: cargo test --release open_sfile -- --nocapture
 	#[test]
 	fn open_sfile() {
@@ -660,8 +667,14 @@ mod tests {
 
 		for path in paths {
 			let start = std::time::Instant::now();
-			let mut source = from_file(&path)
-				.unwrap_or_else(|e| panic!("could not open {}: {}", path.display(), e));
+			let mut source = match from_file(&path) {
+				Ok(source) => source,
+				Err(e) if SFILE_PASSWORD.is_none() && is_password_required(&e) => {
+					println!("{}: encrypted, SFILE_PASSWORD was not set at build time, skipping", path.display());
+					continue;
+				}
+				Err(e) => panic!("could not open {}: {}", path.display(), e),
+			};
 			let open_time = start.elapsed();
 
 			// Timestamps are already corrected at this point, but the scan over all entries is the same
