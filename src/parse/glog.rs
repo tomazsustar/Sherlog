@@ -581,3 +581,544 @@ pub fn from_file(path: &std::path::PathBuf) -> Result<model::LogSource, std::io:
     adjust_sensor_timestamps(&mut log_source);
     Ok(log_source)
 }
+// Tests for the GLOG parser and the sensor timestamp correction.
+//
+// GLOG files are written by firmware that can lose power at any time. The tests cover
+// the malformed input the parser was hardened against over time: truncated entries,
+// missing line endings, garbage and flash padding (NUL / 0xFF bytes), brackets inside
+// messages, invalid field values and controller sub-sources.
+//
+// Tests marked #[ignore = "known bug: ..."] describe the correct behavior for cases the
+// parser currently gets wrong. Run them with: cargo test -- --ignored
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[derive(Debug, PartialEq)]
+	struct Entry {
+		timestamp: DateTime<Utc>,
+		severity: model::LogLevel,
+		session_id: Option<u32>,
+		message: String,
+	}
+
+	fn parse(input: &[u8]) -> model::LogSource {
+		let root = model::LogSource {
+			name: "root".to_string(),
+			children: model::LogSourceContents::Entries(Vec::new()),
+		};
+		to_log_entries(input, root)
+	}
+
+	fn to_entries(v: &[model::LogEntry]) -> Vec<Entry> {
+		v.iter()
+			.map(|e| Entry {
+				timestamp: e.timestamp,
+				severity: match e.severity {
+					model::LogLevel::Critical => model::LogLevel::Critical,
+					model::LogLevel::Error => model::LogLevel::Error,
+					model::LogLevel::Warning => model::LogLevel::Warning,
+					model::LogLevel::Info => model::LogLevel::Info,
+					model::LogLevel::Debug => model::LogLevel::Debug,
+					model::LogLevel::Trace => model::LogLevel::Trace,
+				},
+				session_id: match e.custom_fields.get("SessionId") {
+					Some(model::CustomField::UInt32(id)) => Some(*id),
+					_ => None,
+				},
+				message: e.message.clone(),
+			})
+			.collect()
+	}
+
+	// Entries of a source without sub-sources
+	fn entries(source: &model::LogSource) -> Vec<Entry> {
+		match &source.children {
+			model::LogSourceContents::Entries(v) => to_entries(v),
+			model::LogSourceContents::Sources(_) => panic!("expected entries, got sub-sources"),
+		}
+	}
+
+	// (name, entries) of each sub-source
+	fn sub_sources(source: &model::LogSource) -> Vec<(String, Vec<Entry>)> {
+		match &source.children {
+			model::LogSourceContents::Sources(v) => v.iter().map(|s| (s.name.clone(), entries(s))).collect(),
+			model::LogSourceContents::Entries(_) => panic!("expected sub-sources, got entries"),
+		}
+	}
+
+	fn messages(source: &model::LogSource) -> Vec<String> {
+		entries(source).into_iter().map(|e| e.message).collect()
+	}
+
+	fn ts100(gcom_datetime: u64) -> DateTime<Utc> {
+		datetime_utils::from_100ns(gcom_datetime).unwrap()
+	}
+
+	fn ts_ms(timestamp_ms: u64) -> DateTime<Utc> {
+		datetime_utils::from_timestamp_ms(timestamp_ms).unwrap()
+	}
+
+	fn epoch() -> DateTime<Utc> {
+		model::LogEntry::default().timestamp
+	}
+
+	fn sensor(session_id: u32, ts: u64, severity: u32, message: &str) -> String {
+		format!("[n|{}]:[t|{}]:[e|5420000]:[s|{}]:[m|{}]", session_id, ts, severity, message)
+	}
+
+	const T1: u64 = 639265188101410000; // 2026-10-02 06:20:10.141
+	const T2: u64 = 639265188101420000; // 2026-10-02 06:20:10.142
+	const T_BOOT: u64 = 621355968151283476; // 1970-01-01 00:00:15.128, before time sync
+
+	fn first() -> String {
+		sensor(5, T1, 3, "first")
+	}
+
+	fn second() -> String {
+		sensor(5, T2, 4, "second")
+	}
+
+	// Well-formed input --------------------------------------------------------------
+
+	#[test]
+	fn sensor_entries_crlf() {
+		let source = parse(format!("{}\r\n{}\r\n", first(), second()).as_bytes());
+		assert_eq!(
+			entries(&source),
+			vec![
+				Entry { timestamp: ts100(T1), severity: model::LogLevel::Warning, session_id: Some(5), message: "first".to_string() },
+				Entry { timestamp: ts100(T2), severity: model::LogLevel::Info, session_id: Some(5), message: "second".to_string() },
+			]
+		);
+	}
+
+	#[test]
+	fn sensor_entries_lf() {
+		let crlf = parse(format!("{}\r\n{}\r\n", first(), second()).as_bytes());
+		let lf = parse(format!("{}\n{}\n", first(), second()).as_bytes());
+		assert_eq!(entries(&lf), entries(&crlf));
+	}
+
+	#[test]
+	fn controller_entry_ms_timestamp() {
+		let source = parse(b"[tq|000001790853428348]:[s|4]:[m|msg]\n");
+		assert_eq!(
+			entries(&source),
+			vec![Entry { timestamp: ts_ms(1790853428348), severity: model::LogLevel::Info, session_id: None, message: "msg".to_string() }]
+		);
+	}
+
+	#[test]
+	fn severities() {
+		let source = parse(b"[s|0]:[m|a]\r\n[s|1]:[m|b]\r\n[s|2]:[m|c]\r\n[s|3]:[m|d]\r\n[s|4]:[m|e]\r\n[s|5]:[m|f]\r\n");
+		let severities: Vec<model::LogLevel> = entries(&source).into_iter().map(|e| e.severity).collect();
+		assert_eq!(
+			severities,
+			vec![
+				model::LogLevel::Critical, // Critical
+				model::LogLevel::Critical, // Hardware
+				model::LogLevel::Error,
+				model::LogLevel::Warning,
+				model::LogLevel::Info,
+				model::LogLevel::Debug, // None: used by buggy firmware for unstructured output
+			]
+		);
+	}
+
+	#[test]
+	fn entry_without_optional_fields() {
+		let source = parse(b"[m|only message]\r\n");
+		assert_eq!(
+			entries(&source),
+			vec![Entry { timestamp: epoch(), severity: model::LogLevel::Error, session_id: None, message: "only message".to_string() }]
+		);
+	}
+
+	// Empty input and line endings ---------------------------------------------------
+
+	#[test]
+	fn empty_input() {
+		assert!(entries(&parse(b"")).is_empty());
+	}
+
+	#[test]
+	fn only_line_breaks() {
+		assert!(entries(&parse(b"\r\n\n\r\n\n")).is_empty());
+	}
+
+	#[test]
+	fn line_breaks_before_first_entry() {
+		assert_eq!(messages(&parse(format!("\r\n\n{}\r\n", first()).as_bytes())), vec!["first"]);
+	}
+
+	#[test]
+	fn last_entry_without_line_break() {
+		assert_eq!(messages(&parse(format!("{}\r\n{}", first(), second()).as_bytes())), vec!["first", "second"]);
+	}
+
+	#[test]
+	fn last_entry_with_cr_only() {
+		assert_eq!(messages(&parse(format!("{}\r\n{}\r", first(), second()).as_bytes())), vec!["first", "second"]);
+	}
+
+	#[test]
+	#[ignore = "known bug: an empty line between entries makes the parser lose all following entries"]
+	fn empty_lines_between_entries() {
+		let source = parse(format!("{}\r\n\r\n\r\n{}\r\n\r\n", first(), second()).as_bytes());
+		assert_eq!(messages(&source), vec!["first", "second"]);
+	}
+
+	// Truncated input (power loss while writing) -------------------------------------
+
+	#[test]
+	fn cut_off_in_kind() {
+		assert_eq!(messages(&parse(format!("{}\r\n[n|5]:[t|1]:[m", first()).as_bytes())), vec!["first"]);
+	}
+
+	#[test]
+	fn cut_off_in_value() {
+		assert_eq!(messages(&parse(format!("{}\r\n[n|5]:[t|1]:[m|half mess", first()).as_bytes())), vec!["first"]);
+	}
+
+	#[test]
+	fn cut_off_after_open_bracket() {
+		assert_eq!(messages(&parse(format!("{}\r\n[n|5]:[", first()).as_bytes())), vec!["first"]);
+	}
+
+	#[test]
+	fn cut_off_after_section_separator() {
+		assert_eq!(messages(&parse(format!("{}\r\n[n|5]:[t|{}]:", first(), T2).as_bytes())), vec!["first"]);
+	}
+
+	#[test]
+	fn cut_off_after_closing_bracket() {
+		// The last section is complete, only the line break is missing
+		let source = parse(format!("{}\r\n[n|5]:[t|{}]:[s|4]:[m|last]", first(), T2).as_bytes());
+		assert_eq!(messages(&source), vec!["first", "last"]);
+	}
+
+	#[test]
+	fn cut_off_at_every_position_does_not_panic() {
+		let input = format!("{}\r\n{}\r\n{}\n", first(), second(), "[tq|000001790853428348]:[s|4]:[i|13]:[m|Name: msg]");
+		let input = input.as_bytes();
+		for len in 0..=input.len() {
+			parse(&input[..len]);
+		}
+		// Cutting off anywhere after the first entry's line break keeps the first entry intact
+		let first_end = first().len() + 2;
+		for len in first_end..=input.len() {
+			let source = parse(&input[..len]);
+			let first_entry = match &source.children {
+				model::LogSourceContents::Entries(v) => to_entries(v).into_iter().next(),
+				model::LogSourceContents::Sources(v) => v.iter().find(|s| s.name == "Unknown (None)").and_then(|s| entries(s).into_iter().next()),
+			};
+			assert_eq!(first_entry.map(|e| e.message), Some("first".to_string()), "cut off at {}", len);
+		}
+	}
+
+	// Garbage and flash padding ------------------------------------------------------
+
+	#[test]
+	fn garbage_before_first_entry() {
+		assert_eq!(messages(&parse(format!("xyz{}\r\n", first()).as_bytes())), vec!["first"]);
+	}
+
+	#[test]
+	fn nul_padding_inside_cut_off_entry() {
+		// Power loss in the middle of an entry, flash padding, then reboot
+		let mut input = b"[n|5]:[t|639265188101410000]:[e|0]:[s|3]:[m|cut".to_vec();
+		input.extend(std::iter::repeat(0u8).take(16));
+		input.extend(format!("{}\r\n", sensor(6, T_BOOT, 4, "after reboot")).as_bytes());
+		assert_eq!(messages(&parse(&input)), vec!["after reboot"]);
+	}
+
+	#[test]
+	#[ignore = "known bug: the entry before NUL padding is lost and the next entry gets its session ID"]
+	fn nul_padding_between_sessions() {
+		// Real pattern after power loss: the flash contains NUL bytes between the last entry of the old
+		// session and the first entry after reboot (e.g. telescope_LoggerAtr_1_p.glog: 209 NUL bytes)
+		let mut input = format!("{}\r\n", first()).into_bytes();
+		input.extend(std::iter::repeat(0u8).take(209));
+		input.extend(format!("{}\r\n", sensor(6, T_BOOT, 4, "after reboot")).as_bytes());
+		assert_eq!(
+			entries(&parse(&input)),
+			vec![
+				Entry { timestamp: ts100(T1), severity: model::LogLevel::Warning, session_id: Some(5), message: "first".to_string() },
+				Entry { timestamp: ts100(T_BOOT), severity: model::LogLevel::Info, session_id: Some(6), message: "after reboot".to_string() },
+			]
+		);
+	}
+
+	#[test]
+	#[ignore = "known bug: the entry before 0xFF padding is lost and the next entry gets its session ID"]
+	fn ff_padding_between_sessions() {
+		let mut input = format!("{}\r\n", first()).into_bytes();
+		input.extend(std::iter::repeat(0xFFu8).take(16));
+		input.extend(format!("{}\r\n", sensor(6, T_BOOT, 4, "after reboot")).as_bytes());
+		let source = parse(&input);
+		assert_eq!(messages(&source), vec!["first", "after reboot"]);
+		assert_eq!(entries(&source)[1].session_id, Some(6));
+	}
+
+	#[test]
+	#[ignore = "known bug: NUL padding at the end of a file drops the last entry"]
+	fn nul_padding_at_end() {
+		let mut input = format!("{}\r\n", first()).into_bytes();
+		input.extend(std::iter::repeat(0u8).take(16));
+		assert_eq!(messages(&parse(&input)), vec!["first"]);
+	}
+
+	#[test]
+	#[ignore = "known bug: a garbage line between entries drops the entry before it"]
+	fn garbage_line_between_entries() {
+		let source = parse(format!("{}\r\nxyz\r\n{}\r\n", first(), second()).as_bytes());
+		assert_eq!(messages(&source), vec!["first", "second"]);
+	}
+
+	// Brackets and line breaks inside messages ---------------------------------------
+
+	#[test]
+	fn brackets_in_message() {
+		assert_eq!(messages(&parse(format!("{}\r\n", sensor(5, T1, 4, "[M7 Log] text")).as_bytes())), vec!["[M7 Log] text"]);
+	}
+
+	#[test]
+	fn message_ending_with_bracket() {
+		// Real example: "kernel: Booting Linux on physical CPU 0x0000000000 [0x410fd034]]"
+		assert_eq!(messages(&parse(format!("{}\r\n", sensor(5, T1, 4, "CPU [0x410fd034]")).as_bytes())), vec!["CPU [0x410fd034]"]);
+	}
+
+	#[test]
+	fn closing_bracket_and_colon_in_message() {
+		assert_eq!(messages(&parse(format!("{}\r\n", sensor(5, T1, 4, "a]:b")).as_bytes())), vec!["a]:b"]);
+	}
+
+	#[test]
+	fn line_breaks_in_message() {
+		// Real example: "Init command V2 completed successfully. (0 Errors, 0 Warnings, 0 Infos)\n]"
+		assert_eq!(messages(&parse(format!("{}\r\n", sensor(5, T1, 4, "line1\nline2\n")).as_bytes())), vec!["line1\nline2\n"]);
+	}
+
+	#[test]
+	fn section_separator_in_message_ends_the_message() {
+		// "]\n[" inside a message is indistinguishable from the end of the entry. The rest is not a valid section.
+		assert_eq!(messages(&parse(format!("{}\r\n", sensor(5, T1, 4, "a]\n[b")).as_bytes())), vec!["a"]);
+	}
+
+	// Invalid fields -----------------------------------------------------------------
+
+	#[test]
+	fn unknown_kind_is_ignored() {
+		let source = parse(format!("[x|whatever]:{}\r\n", sensor(5, T1, 4, "msg")).as_bytes());
+		assert_eq!(
+			entries(&source),
+			vec![Entry { timestamp: ts100(T1), severity: model::LogLevel::Info, session_id: Some(5), message: "msg".to_string() }]
+		);
+	}
+
+	#[test]
+	fn invalid_utf8_in_message() {
+		let source = parse(b"[n|5]:[t|639265188101410000]:[s|4]:[m|bad \xC3\x28 utf8]\r\n");
+		assert_eq!(messages(&source), vec!["bad \u{FFFD}( utf8"]);
+	}
+
+	#[test]
+	fn invalid_utf8_in_kind() {
+		let source = parse(b"[\xC3\x28|1]:[t|639265188101410000]:[s|4]:[m|msg]\r\n");
+		assert_eq!(
+			entries(&source),
+			vec![Entry { timestamp: ts100(T1), severity: model::LogLevel::Info, session_id: None, message: "msg".to_string() }]
+		);
+	}
+
+	#[test]
+	fn invalid_timestamp() {
+		let source = parse(b"[n|5]:[t|abc]:[s|4]:[m|msg]\r\n");
+		assert_eq!(entries(&source)[0].timestamp, epoch());
+	}
+
+	#[test]
+	fn invalid_ms_timestamp() {
+		let source = parse(b"[tq|abc]:[s|4]:[m|msg]\n");
+		assert_eq!(entries(&source)[0].timestamp, epoch());
+	}
+
+	#[test]
+	fn invalid_severity() {
+		for input in [&b"[n|5]:[t|639265188101410000]:[s|9]:[m|msg]\r\n"[..], &b"[n|5]:[t|639265188101410000]:[s|x]:[m|msg]\r\n"[..]] {
+			let source = parse(input);
+			assert_eq!(entries(&source)[0].severity, model::LogLevel::Error);
+			assert_eq!(entries(&source)[0].message, "msg");
+		}
+	}
+
+	#[test]
+	fn invalid_session_id() {
+		let source = parse(b"[n|x]:[t|639265188101410000]:[s|4]:[m|msg]\r\n");
+		assert_eq!(entries(&source)[0].session_id, None);
+	}
+
+	#[test]
+	fn section_without_kind_separator() {
+		assert!(entries(&parse(b"[m only message]\r\n")).is_empty());
+	}
+
+	// Controller sub-sources ---------------------------------------------------------
+
+	#[test]
+	fn sub_sources_by_message_prefix() {
+		let source = parse(
+			b"[tq|000001790853428348]:[s|4]:[i|13]:[m|zeta: a]\n\
+			  [tq|000001790853428349]:[s|4]:[i|13]:[m|Alpha: b]\n\
+			  [tq|000001790853428350]:[s|4]:[i|7]:[m|zeta: c]\n",
+		);
+		let sub_sources: Vec<(String, Vec<String>)> =
+			sub_sources(&source).into_iter().map(|(name, v)| (name, v.into_iter().map(|e| e.message).collect())).collect();
+		// Sorted by name, case insensitive. The source ID is not used, only the message prefix.
+		assert_eq!(
+			sub_sources,
+			vec![
+				("Alpha".to_string(), vec!["Alpha: b".to_string()]),
+				("zeta".to_string(), vec!["zeta: a".to_string(), "zeta: c".to_string()]),
+			]
+		);
+	}
+
+	#[test]
+	fn sub_source_without_name() {
+		let source = parse(b"[tq|000001790853428348]:[s|4]:[i|13]:[m|no colon here]\n[tq|000001790853428349]:[s|4]:[i|13]:[m|: empty name]\n");
+		let sub_sources = sub_sources(&source);
+		assert_eq!(sub_sources.len(), 1);
+		assert_eq!(sub_sources[0].0, "Unknown (13)");
+		assert_eq!(sub_sources[0].1.len(), 2);
+	}
+
+	#[test]
+	fn sub_source_with_invalid_id() {
+		// An invalid source ID is ignored, the entry goes into the root
+		let source = parse(b"[tq|000001790853428348]:[s|4]:[i|x]:[m|Name: msg]\n");
+		assert_eq!(messages(&source), vec!["Name: msg"]);
+	}
+
+	#[test]
+	fn entries_with_and_without_sub_source() {
+		let source = parse(b"[tq|000001790853428348]:[s|4]:[i|13]:[m|Name: a]\n[tq|000001790853428349]:[s|4]:[m|no source]\n");
+		let names: Vec<String> = sub_sources(&source).into_iter().map(|(name, _)| name).collect();
+		assert_eq!(names, vec!["Name", "Unknown (None)"]);
+	}
+
+	#[test]
+	fn sub_source_id_does_not_leak_to_next_entry() {
+		let source = parse(b"[tq|000001790853428348]:[s|4]:[i|13]:[m|Name: a]\n[tq|000001790853428349]:[s|4]:[m|Other: b]\n");
+		let sub_sources = sub_sources(&source);
+		assert_eq!(sub_sources[1].0, "Unknown (None)");
+		assert_eq!(sub_sources[1].1[0].message, "Other: b");
+	}
+
+	// Sensor timestamp correction ----------------------------------------------------
+
+	const DELTA: i64 = 1790921687981282700; // ns
+
+	fn corrected(raw: u64) -> DateTime<Utc> {
+		datetime_utils::add_offset_100ns(ts100(raw), DELTA / 100).unwrap()
+	}
+
+	fn adjusted(lines: &[String]) -> Vec<Entry> {
+		let mut input = String::new();
+		for line in lines {
+			input.push_str(line);
+			input.push_str("\r\n");
+		}
+		let mut source = parse(input.as_bytes());
+		adjust_sensor_timestamps(&mut source);
+		entries(&source)
+	}
+
+	#[test]
+	fn time_correction_ethercat() {
+		let result = adjusted(&[
+			sensor(5, T_BOOT, 4, "before sync"),
+			sensor(5, T_BOOT + 1, 4, &format!("Setting EtherCAT time [delta = {} ns]", DELTA)),
+			sensor(5, T1, 4, "after sync"),
+		]);
+		assert_eq!(result[0].timestamp, corrected(T_BOOT));
+		assert_eq!(result[1].timestamp, ts100(T_BOOT + 1)); // The correction entry itself is not corrected
+		assert_eq!(result[2].timestamp, ts100(T1));
+	}
+
+	#[test]
+	fn time_correction_with_dot_and_other_time_sources() {
+		for line in [
+			format!("Setting EtherCAT time [delta = {} ns].", DELTA),
+			format!("Setting gPTP time [delta = {} ns]", DELTA),
+			format!("Setting 802.1AS time [delta = {} ns]", DELTA),
+		] {
+			let result = adjusted(&[sensor(5, T_BOOT, 4, "before sync"), sensor(5, T_BOOT + 1, 4, &line)]);
+			assert_eq!(result[0].timestamp, corrected(T_BOOT), "{}", line);
+		}
+	}
+
+	#[test]
+	fn time_correction_only_within_session() {
+		let result = adjusted(&[
+			sensor(4, T_BOOT, 4, "other session"),
+			sensor(5, T_BOOT, 4, "same session"),
+			sensor(5, T_BOOT + 1, 4, &format!("Setting EtherCAT time [delta = {} ns]", DELTA)),
+		]);
+		assert_eq!(result[0].timestamp, ts100(T_BOOT));
+		assert_eq!(result[1].timestamp, corrected(T_BOOT));
+	}
+
+	#[test]
+	fn time_correction_only_before_2001() {
+		let already_correct: u64 = 631139040000000000; // 2001-01-01 00:00:00
+		let result = adjusted(&[
+			sensor(5, already_correct, 4, "already correct"),
+			sensor(5, T_BOOT + 1, 4, &format!("Setting EtherCAT time [delta = {} ns]", DELTA)),
+		]);
+		assert_eq!(result[0].timestamp, ts100(already_correct));
+	}
+
+	#[test]
+	fn time_correction_uses_the_preceding_delta_of_a_session() {
+		// Two corrections in the same session: entries are corrected with the next newer one
+		let result = adjusted(&[
+			sensor(5, T_BOOT, 4, "corrected with first delta"),
+			sensor(5, T_BOOT + 1, 4, &format!("Setting EtherCAT time [delta = {} ns]", DELTA)),
+			sensor(5, T_BOOT + 2, 4, "corrected with second delta"),
+			sensor(5, T_BOOT + 3, 4, &format!("Setting EtherCAT time [delta = {} ns]", DELTA + 1_000_000_000)),
+		]);
+		assert_eq!(result[0].timestamp, corrected(T_BOOT));
+		assert_eq!(
+			result[2].timestamp,
+			datetime_utils::add_offset_100ns(ts100(T_BOOT + 2), (DELTA + 1_000_000_000) / 100).unwrap()
+		);
+	}
+
+	#[test]
+	fn time_correction_without_delta() {
+		let result = adjusted(&[sensor(5, T_BOOT, 4, "never synchronized")]);
+		assert_eq!(result[0].timestamp, ts100(T_BOOT));
+	}
+
+	#[test]
+	fn time_correction_with_invalid_delta() {
+		let result = adjusted(&[
+			sensor(5, T_BOOT, 4, "before sync"),
+			sensor(5, T_BOOT + 1, 4, "Setting EtherCAT time [delta = 99999999999999999999 ns]"),
+		]);
+		assert_eq!(result[0].timestamp, ts100(T_BOOT));
+	}
+
+	#[test]
+	fn time_correction_stops_at_entries_without_session() {
+		let result = adjusted(&[
+			sensor(5, T_BOOT, 4, "before gap"),
+			format!("[t|{}]:[s|4]:[m|no session]", T_BOOT),
+			sensor(5, T_BOOT + 1, 4, &format!("Setting EtherCAT time [delta = {} ns]", DELTA)),
+		]);
+		assert_eq!(result[0].timestamp, ts100(T_BOOT));
+		assert_eq!(result[1].timestamp, ts100(T_BOOT));
+	}
+}
