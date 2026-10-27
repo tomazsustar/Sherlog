@@ -2,23 +2,20 @@
 
 ## Open:
 Right click also sets anchor. Is this behaviour desired?
-Copy-paste of log entries: Also paste severity!
+Copy log entries as rich text too (severity colors, monospace font), not only as plain text
 Scroll bar if list is small: Bigger slider
 Scroll bar if list fits into screen: Block slider (make it as big as the space it resides in)
-Time zone selection via GUI (currently times are always shown in UTC)
 Drag & drop file into Sherlog to open it
-Add help text (--help option)
+Add help text (--help option). Remove the test option "-c" ("CTest").
 Minor GUI lag when entire screen is filled with long log lines (has to render too many characters?)
-Add context menu and add File -> Open option with file picker
+Add context menu
 Add "jump to anchor" functionality, either triggered by GUI button or hotkey
-Figure out exact type of things like SessionId, LogSource, etc. (u32? i32? u64?... This is largely done)
 
 Mark malformed entries: broken timestamp, double message in same entry, various parsing issues, etc.
 Recognize core dumps in sfile. Warn user about presence of core dumps.
 At end: Curoffset problems! Overscroll!
 Anchor: Overscroll when anchored to end of small subset
 Offsets like `first_offset` and `last_offset` point to non-existing elements if log store is empty. These values aren't options. This is dangerous design and may lead to panics if the log store is empty.
-Performance optimization in anchoring code, offset code (rel_to_abs_offset, abs_to_rel_offset) and render iter code. We can skip hidden elements thanks to `prev_offset`, `next_offset` in LogEntryExt.
 How to render newline chars in log message? Currently they just render as a rectangle.
 Search: "Match word" functionality, do not match substring inside word.
 Go to date (nearest). Note this is difficult/impossible to implement if the list is not sorted by date, as it becomes ambiguous.
@@ -28,7 +25,7 @@ Just from looking at a log line, it is hard to tell from which log source it com
 Tab support when opening multiple files
 Merge multiple sfiles together into the same tree
 Save interesting messages into a clue list for quick jumping between them
-Open window with loading screen and only then start parsing sfile, so user gets feedback when he double clicks a large sfile.
+Open window with loading screen and only then start parsing sfile, so user gets feedback when he double clicks a large sfile. See performance #1.
 
 ## Performance, most gain first:
 Gains measured or estimated with a 55 MB sfile (1.8 million entries, 1.8 s until the first frame).
@@ -44,7 +41,7 @@ Gains measured or estimated with a 55 MB sfile (1.8 million entries, 1.8 s until
 | 7 | Glog parser: find delimiters with `memchr` and take values as slices instead of copying every byte into `buf`. | up to half of glog parse time |
 | 8 | Xlog parser: reuse one line buffer (`read_line`) instead of `lines()`. | small |
 | 9 | `draw()`: set the font once per frame and avoid a `String` per date. | smoother scrolling |
-| 10 | `rel_to_abs_offset`, `abs_to_rel_offset`: skip hidden entries with `prev_offset`/`next_offset` (see above). | faster filtering on big logs |
+| 10 | Anchoring code, `rel_to_abs_offset`, `abs_to_rel_offset` and the render iterator: skip hidden entries with `prev_offset`/`next_offset` in `LogEntryExt`. | faster filtering on big logs |
 
 
 ## Unclear:
@@ -55,3 +52,7 @@ Copy-Paste logs does not work if we are searching (Seems to work?)
 ## Done:
 
 Are the timestamps in Xlog always UTC? (yes, this is confirmed)
+Copy-paste of log entries: Also paste severity!
+Time zone selection via GUI (currently times are always shown in UTC)
+File -> Open option with file picker
+Figure out exact type of things like SessionId, LogSource, etc. (session ID is a u32 field, log source ID an i32)
