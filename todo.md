@@ -25,23 +25,22 @@ Just from looking at a log line, it is hard to tell from which log source it com
 Tab support when opening multiple files
 Merge multiple sfiles together into the same tree
 Save interesting messages into a clue list for quick jumping between them
-Open window with loading screen and only then start parsing sfile, so user gets feedback when he double clicks a large sfile. See performance #1.
 
 ## Performance, most gain first:
-Gains measured or estimated with a 55 MB sfile (1.8 million entries, 1.8 s until the first frame).
+Gains measured or estimated with a 55 MB sfile (1.8 million entries, logs visible after 1.4 s).
+The file is parsed while GTK shows the window. Parser gains only shorten the wait for files that take longer to parse than that.
 
 | # | Optimization | Expected gain |
 | --- | --- | --- |
-| 1 | Show the window first, and parse, convert and sort in a background thread. GTK needs 0.8 s to show and draw the window, which can overlap with that work. | window after ~1.0 s, logs ~0.5 s sooner |
-| 2 | One parse job per glog file instead of per group. Merge the parts in ring buffer order before the time correction. | ~0.1 s |
-| 3 | Schedule parse jobs by uncompressed size times a cost per file type. Glog costs ~5x more per MB than xlog. | part of #2 |
-| 4 | Create `LogEntryExt` directly in the parsers, without converting `LogEntry` in `from_source`. | ~0.1 s, less memory |
-| 5 | Sort by merging the per-source lists, which are already mostly sorted, or sort indices instead of entries. | ~0.05 s |
-| 6 | Glog parser: read in 64 KB chunks instead of one byte per `read()` call. | ~17% of glog parse time |
-| 7 | Glog parser: find delimiters with `memchr` and take values as slices instead of copying every byte into `buf`. | up to half of glog parse time |
-| 8 | Xlog parser: reuse one line buffer (`read_line`) instead of `lines()`. | small |
-| 9 | `draw()`: set the font once per frame and avoid a `String` per date. | smoother scrolling |
-| 10 | Anchoring code, `rel_to_abs_offset`, `abs_to_rel_offset` and the render iterator: skip hidden entries with `prev_offset`/`next_offset` in `LogEntryExt`. | faster filtering on big logs |
+| 1 | One parse job per glog file instead of per group. Merge the parts in ring buffer order before the time correction. | ~0.1 s |
+| 2 | Schedule parse jobs by uncompressed size times a cost per file type. Glog costs ~5x more per MB than xlog. | part of #1 |
+| 3 | Create `LogEntryExt` directly in the parsers, without converting `LogEntry` in `from_source`. | ~0.1 s, less memory |
+| 4 | Sort by merging the per-source lists, which are already mostly sorted, or sort indices instead of entries. | ~0.05 s |
+| 5 | Glog parser: read in 64 KB chunks instead of one byte per `read()` call. | ~17% of glog parse time |
+| 6 | Glog parser: find delimiters with `memchr` and take values as slices instead of copying every byte into `buf`. | up to half of glog parse time |
+| 7 | Xlog parser: reuse one line buffer (`read_line`) instead of `lines()`. | small |
+| 8 | `draw()`: set the font once per frame and avoid a `String` per date. | smoother scrolling |
+| 9 | Anchoring code, `rel_to_abs_offset`, `abs_to_rel_offset` and the render iterator: skip hidden entries with `prev_offset`/`next_offset` in `LogEntryExt`. | faster filtering on big logs |
 
 
 ## Unclear:
@@ -56,3 +55,4 @@ Copy-paste of log entries: Also paste severity!
 Time zone selection via GUI (currently times are always shown in UTC)
 File -> Open option with file picker
 Figure out exact type of things like SessionId, LogSource, etc. (session ID is a u32 field, log source ID an i32)
+Open window with loading screen and only then start parsing sfile, so user gets feedback when he double clicks a large sfile.

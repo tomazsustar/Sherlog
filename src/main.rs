@@ -262,6 +262,15 @@ fn draw(
 	ctx.set_source_rgb(1.0, 1.0, 1.0);
 	ctx.paint().unwrap();
 
+	if let Some(loading_text) = &store.loading_text {
+		ctx.select_font_face(font, cairo::FontSlant::Normal, cairo::FontWeight::Normal);
+		ctx.set_font_size(store.font_size);
+		ctx.set_source_rgb(0.4, 0.4, 0.4);
+		ctx.move_to(store.border_left, store.border_top + store.font_size);
+		ctx.show_text(loading_text).unwrap();
+		return gtk::Inhibit(false);
+	}
+
 	/*ctx.set_source_rgb(1.0, 0.0, 0.0);
 	ctx.rectangle(10.0, 10.0, 2.0, 2.0);
 	ctx.fill().unwrap();
@@ -713,6 +722,22 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 		}
 	}
 
+	// Read the file in the background while the window is built and shown
+	let loading_receiver = file_path.map(|file_path| {
+		let (sender, receiver) = glib::MainContext::channel(glib::PRIORITY_DEFAULT);
+		let file_path = file_path.clone();
+		std::thread::spawn(move || {
+			let result = std::panic::catch_unwind(|| log_loader::load_file(&file_path, SortMode::Timestamp));
+			let result = match result {
+				Ok(Ok(loaded)) => Ok(loaded),
+				Ok(Err(err)) => Err(format!("Error: {}", err)),
+				Err(_) => Err("Error: Sherlog crashed while reading the file".to_string()),
+			};
+			let _ = sender.send(result);
+		});
+		receiver
+	});
+
 	let pango_ctx = window.pango_context();
 	let preferred_font = pango_ctx
 		.font_map()
@@ -829,27 +854,6 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 
 	//---------------------------------------------------------------------------------------
 
-	let mut dialog_vec: Vec<gtk::MessageDialog> = Vec::<gtk::MessageDialog>::new();
-
-	let loaded = if let Some(file_path) = file_path {
-		match log_loader::load_file(file_path, SortMode::Timestamp) {
-			Ok(loaded) => loaded,
-			Err(err) => {
-				let error_str = format!("Error: {}", err);
-				dialog_vec.push(gtk::MessageDialog::new(
-					Some(&window),
-					gtk::DialogFlags::empty(),
-					gtk::MessageType::Error,
-					gtk::ButtonsType::Ok,
-					&error_str,
-				));
-				log_loader::load(log_source_root, SortMode::Timestamp)
-			}
-		}
-	} else {
-		log_loader::load(log_source_root, SortMode::Timestamp)
-	};
-
 	// Create log store as Refcounted RefCell to be used in closures ------------------------
 
 	let store = LogStoreLinear {
@@ -911,6 +915,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 		sensor_shift: chrono::Duration::zero(),
 		log_sources_to_shift: Vec::new(),
 		sort_mode: SortMode::Timestamp,
+		loading_text: file_path.map(|p| format!("Loading {} ...", p.file_name().unwrap_or(p.as_os_str()).to_string_lossy())),
 	};
 
 	let store_rc = Rc::new(RefCell::new(store));
@@ -1066,8 +1071,6 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 			LogSourceContentsExt::Entries(_v) => (),
 		}
 	}
-	build_left_store(&left_store, &loaded.root, None);
-	sources_tree_view.expand_row(&gtk::TreePath::new_first(), false);
 	//sources_tree_view.expand_all();
 
 	let split_pane = gtk::Paned::new(Orientation::Horizontal);
@@ -1377,16 +1380,60 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 
 	// Assemble log store ----------------------------------------------------------
 
-	{
-		let mut store = store_rc.borrow_mut();
-		store.store = loaded.entries;
-		store.log_sources = loaded.log_sources;
-		store.log_sources_to_shift = loaded.log_sources_to_shift;
-		store.filter_store(
-			&|_entry: &LogEntryExt| true,
-			true,
-			crate::model_internal::VISIBLE_OFF_SOURCE,
-		); //set all to active, initialize ids
+	let show_loaded = {
+		let left_store = left_store.clone();
+		let sources_tree_view = sources_tree_view.clone();
+		let store_rc = store_rc.clone();
+		let split_pane_left = split_pane_left.clone();
+		let drawing_area = drawing_area.clone();
+		move |loaded: log_loader::LoadedLog| {
+			build_left_store(&left_store, &loaded.root, None);
+			sources_tree_view.expand_row(&gtk::TreePath::new_first(), false);
+			{
+				let mut store = store_rc.borrow_mut();
+				store.store = loaded.entries;
+				store.log_sources = loaded.log_sources;
+				store.log_sources_to_shift = loaded.log_sources_to_shift;
+				store.filter_store(
+					&|_entry: &LogEntryExt| true,
+					true,
+					crate::model_internal::VISIBLE_OFF_SOURCE,
+				); //set all to active, initialize ids
+				store.loading_text = None;
+			}
+			split_pane_left.set_sensitive(true);
+			drawing_area.set_sensitive(true);
+			drawing_area.queue_draw();
+		}
+	};
+
+	if let Some(loading_receiver) = loading_receiver {
+		// The log store is empty until the file is loaded, so the user cannot interact with it
+		split_pane_left.set_sensitive(false);
+		drawing_area.set_sensitive(false);
+		let window = window.clone();
+		let mut log_source_root = Some(log_source_root);
+		loading_receiver.attach(None, move |result| {
+			match result {
+				Ok(loaded) => show_loaded(loaded),
+				Err(error_str) => {
+					show_loaded(log_loader::load(log_source_root.take().unwrap(), SortMode::Timestamp));
+					let dialog = gtk::MessageDialog::new(
+						Some(&window),
+						gtk::DialogFlags::empty(),
+						gtk::MessageType::Error,
+						gtk::ButtonsType::Ok,
+						&error_str,
+					);
+					dialog.run();
+					dialog.emit_close();
+				}
+			}
+			notify_loaded(&window);
+			glib::Continue(false)
+		});
+	} else {
+		show_loaded(log_loader::load(log_source_root, SortMode::Timestamp));
 	}
 
 	//-------------------------------------------------------------------------------
@@ -1536,31 +1583,27 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	window.show_all();
 
 	if file_path.is_some() {
-		window.set_urgency_hint(true);
-
-		// Re-trigger blinking 5 seconds after load if the window is still not focused.
-		{
-			let w = window.clone();
-			glib::timeout_add_seconds_local(5, move || {
-				if !w.is_active() {
-					w.set_urgency_hint(false);
-					w.set_urgency_hint(true);
-				}
-				glib::Continue(false)
-			});
-		}
-
 		// Always stop blinking when the user focuses the window.
 		window.connect_focus_in_event(move |w, _| {
 			w.set_urgency_hint(false);
 			gtk::Inhibit(false)
 		});
 	}
+}
 
-	for dialog in dialog_vec {
-		dialog.run();
-		dialog.emit_close();
-	}
+// Blinks the window in the taskbar when a file is loaded
+fn notify_loaded(window: &gtk::ApplicationWindow) {
+	window.set_urgency_hint(true);
+
+	// Re-trigger blinking 5 seconds after load if the window is still not focused.
+	let w = window.clone();
+	glib::timeout_add_seconds_local(5, move || {
+		if !w.is_active() {
+			w.set_urgency_hint(false);
+			w.set_urgency_hint(true);
+		}
+		glib::Continue(false)
+	});
 }
 
 fn gio_files_to_paths(gio_files: &[gio::File]) -> Vec<std::path::PathBuf> {

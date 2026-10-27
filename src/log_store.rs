@@ -81,6 +81,8 @@ pub struct LogStoreLinear {
     pub log_sources_to_shift: Vec<u32>,
 
 	pub sort_mode: SortMode,
+
+	pub loading_text: Option<String>, //Shown instead of the log entries while a file is loaded
 }
 
 impl LogStoreLinear {
