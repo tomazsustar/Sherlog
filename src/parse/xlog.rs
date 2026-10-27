@@ -8,14 +8,31 @@ use std::io::BufReader;
 // XLOG parser ----------------------------------------------------------------------
 
 pub fn to_log_entries(reader: impl std::io::Read, mut root: model::LogSource) -> model::LogSource {
-	let bufreader = BufReader::new(reader);
+	let mut bufreader = BufReader::new(reader);
 	let mut log_entries = Vec::<model::LogEntry>::new();
-	for line in bufreader.lines() {
+	let mut buf = Vec::new();
+	loop {
+		buf.clear();
+		match bufreader.read_until(b'\n', &mut buf) {
+			Ok(0) => break,
+			Ok(_) => (),
+			Err(e) => {
+				// Damaged file, keep the entries read so far
+				log::warn!("Could not read xlog file: {}", e);
+				break;
+			}
+		}
+		if buf.last() == Some(&b'\n') {
+			buf.pop();
+			if buf.last() == Some(&b'\r') {
+				buf.pop();
+			}
+		}
+		let line = String::from_utf8_lossy(&buf);
 		let mut log_entry = model::LogEntry {
 			..Default::default()
 		};
-		//TODO: When is line None? Does that even happen?
-		for unit in line.unwrap().split('˫') {
+		for unit in line.split('˫') {
 			let offset = unit.find('˩');
 			if let Some(offset) = offset {
 				let unit_header = &unit[0..offset];

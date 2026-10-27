@@ -871,3 +871,48 @@ mod time_correction_tests {
 		assert_eq!(sensor_entries(&root, "telescope", "LoggerImaging_p")[0].1, raw(T_BOOT));
 	}
 }
+
+// Damaged sfiles, e.g. from a device that lost power while writing them
+#[cfg(test)]
+mod damaged_file_tests {
+	use super::*;
+
+	#[test]
+	fn damaged_sfile_does_not_panic() {
+		let dir = std::env::temp_dir();
+		let source_path = dir.join(format!("sherlog_test_{}_damage_source.sfile", std::process::id()));
+		crate::sfile_generator::generate(&source_path, &crate::sfile_generator::SMALL).unwrap();
+		let source = std::fs::read(&source_path).unwrap();
+		let _ = std::fs::remove_file(&source_path);
+
+		let mut cases: Vec<(String, Vec<u8>)> = Vec::new();
+		for i in 1..20 {
+			cases.push((format!("cut off at {}%", i * 5), source[..source.len() * i / 20].to_vec()));
+		}
+		for i in 1..40 {
+			let mut damaged = source.clone();
+			let pos = source.len() * i / 40;
+			for b in &mut damaged[pos..(pos + 16).min(source.len())] {
+				*b ^= 0x5A;
+			}
+			cases.push((format!("16 bytes damaged at {}/40", i), damaged));
+		}
+
+		let path = dir.join(format!("sherlog_test_{}_damaged.sfile", std::process::id()));
+		for (name, bytes) in cases {
+			std::fs::write(&path, &bytes).unwrap();
+			let thread_path = path.clone();
+			let (sender, receiver) = std::sync::mpsc::channel();
+			std::thread::spawn(move || {
+				let result = std::panic::catch_unwind(|| from_file(&thread_path).is_ok());
+				let _ = sender.send(result);
+			});
+			match receiver.recv_timeout(std::time::Duration::from_secs(30)) {
+				Ok(Ok(_)) => (),
+				Ok(Err(_)) => panic!("{}: panicked", name),
+				Err(_) => panic!("{}: did not finish within 30 s", name),
+			}
+		}
+		let _ = std::fs::remove_file(&path);
+	}
+}
