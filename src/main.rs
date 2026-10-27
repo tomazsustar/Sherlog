@@ -1471,7 +1471,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 			ctx,
 			preferred_font,
 		);
-		startup_timing::frame_drawn(f_clone_2.borrow().loading_text.is_none());
+		startup_timing::frame_drawn(drawing_area, f_clone_2.borrow().loading_text.is_none());
 		result
 	});
 
