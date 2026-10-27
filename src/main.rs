@@ -30,6 +30,10 @@ mod log_store;
 mod model;
 mod model_internal;
 mod parse;
+#[cfg(test)]
+mod perf_tests;
+#[cfg(test)]
+mod sfile_generator;
 mod ui_formatting;
 mod ui_actions;
 
