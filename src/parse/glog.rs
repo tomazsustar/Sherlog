@@ -15,7 +15,7 @@ use std::sync::LazyLock;
 pub fn to_log_entries(reader: impl std::io::Read, root: model::LogSource) -> model::LogSource {
 	let mut parser = GlogParser::new(root);
 
-	let mut bufreader = BufReader::new(reader);
+	let mut bufreader = BufReader::with_capacity(super::READ_BUFFER_SIZE, reader);
 	let mut buffer = [0; 1];
 	loop {
 		if let Ok(bytes_read) = bufreader.read(&mut buffer) {

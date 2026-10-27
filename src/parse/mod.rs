@@ -9,3 +9,6 @@ pub mod xlog;
 pub mod datetime_utils;
 
 pub use self::io::from_file;
+
+// The decompressor is faster with large reads
+pub const READ_BUFFER_SIZE: usize = 1 << 20;

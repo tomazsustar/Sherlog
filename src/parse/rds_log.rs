@@ -41,7 +41,7 @@ fn read_until_pipe_or_newline(mut reader: impl std::io::Read, buf: &mut Vec<u8>)
 
 pub fn to_log_entries(reader: impl std::io::Read, mut root: model::LogSource) -> model::LogSource {
 	let mut log_entries = Vec::<model::LogEntry>::new();
-	let mut bufreader = BufReader::new(reader);
+	let mut bufreader = BufReader::with_capacity(super::READ_BUFFER_SIZE, reader);
 	let mut buf = Vec::<u8>::with_capacity(512);
 	let mut parser_state = RdsLogParserState::ExpectDatetime;
 
