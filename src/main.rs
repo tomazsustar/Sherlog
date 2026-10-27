@@ -25,6 +25,7 @@ use std::fmt::Write;
 #[allow(unused_imports)]
 use regex::Regex;
 
+mod log_loader;
 mod log_store;
 mod model;
 mod model_internal;
@@ -830,17 +831,9 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 
 	let mut dialog_vec: Vec<gtk::MessageDialog> = Vec::<gtk::MessageDialog>::new();
 
-	let log_source_root = if let Some(file_path) = file_path {
-		let now = Instant::now();
-		let root = parse::from_file(file_path);
-		let elapsed = now.elapsed();
-		log::info!(
-			"Time to parse file: {}ms",
-			elapsed.as_secs() * 1000 + elapsed.subsec_millis() as u64
-		);
-
-		match root {
-			Ok(root) => root,
+	let loaded = if let Some(file_path) = file_path {
+		match log_loader::load_file(file_path, SortMode::Timestamp) {
+			Ok(loaded) => loaded,
 			Err(err) => {
 				let error_str = format!("Error: {}", err);
 				dialog_vec.push(gtk::MessageDialog::new(
@@ -850,11 +843,11 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 					gtk::ButtonsType::Ok,
 					&error_str,
 				));
-				log_source_root
+				log_loader::load(log_source_root, SortMode::Timestamp)
 			}
 		}
 	} else {
-		log_source_root
+		log_loader::load(log_source_root, SortMode::Timestamp)
 	};
 
 	// Create log store as Refcounted RefCell to be used in closures ------------------------
@@ -925,8 +918,6 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	//---------------------------------------------------------------------------------------
 
 	let drawing_area = DrawingArea::new();
-
-	let mut log_source_root_ext = LogSourceExt::from_source(log_source_root);
 
 	// left pane
 	let left_store = TreeStore::new(&[
@@ -1075,7 +1066,7 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 			LogSourceContentsExt::Entries(_v) => (),
 		}
 	}
-	build_left_store(&left_store, &log_source_root_ext, None);
+	build_left_store(&left_store, &loaded.root, None);
 	sources_tree_view.expand_row(&gtk::TreePath::new_first(), false);
 	//sources_tree_view.expand_all();
 
@@ -1284,12 +1275,6 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 
 	split_pane.pack1(&split_pane_left, false, false);
 
-	// Initialize log sources to shift
-    log_source_root_ext.collect_descendant_ids_of_filtered_roots(
-        &|src| matches!(src.name.as_str(), "Controller" | "Sensor" | "Probe" | "Connect Box"),
-        &mut store_rc.borrow_mut().log_sources_to_shift
-    );
-
 	
 
 	let timeshift_entry = gtk::Entry::new();
@@ -1392,59 +1377,17 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 
 	// Assemble log store ----------------------------------------------------------
 
-	fn build_log_store(store: &mut Vec<LogEntryExt>, log_source: &mut LogSourceExt) {
-		match &mut log_source.children {
-			LogSourceContentsExt::Sources(v) => {
-				for source in v {
-					build_log_store(store, source);
-				}
-			}
-			LogSourceContentsExt::Entries(v) => {
-				store.append(v);
-			}
-		}
+	{
+		let mut store = store_rc.borrow_mut();
+		store.store = loaded.entries;
+		store.log_sources = loaded.log_sources;
+		store.log_sources_to_shift = loaded.log_sources_to_shift;
+		store.filter_store(
+			&|_entry: &LogEntryExt| true,
+			true,
+			crate::model_internal::VISIBLE_OFF_SOURCE,
+		); //set all to active, initialize ids
 	}
-
-	log::info!("before build_log_store");
-	let now = Instant::now();
-	build_log_store(&mut store_rc.borrow_mut().store, &mut log_source_root_ext);
-
-	fn build_log_sources(
-		log_sources: &mut std::collections::HashMap<u32, String>,
-		log_source: &LogSourceExt,
-		prefix: String,
-	) {
-		let current_name = String::new() + &prefix + "/" + &log_source.name;
-		log_sources.insert(log_source.id, current_name.clone());
-		match &log_source.children {
-			LogSourceContentsExt::Sources(v) => {
-				for source in v {
-					build_log_sources(log_sources, source, current_name.clone());
-				}
-			}
-			LogSourceContentsExt::Entries(_) => (),
-		}
-	}
-
-	build_log_sources(
-		&mut store_rc.borrow_mut().log_sources,
-		&log_source_root_ext,
-		String::new(),
-	);
-
-	store_rc.borrow_mut().sort_entries();
-	store_rc.borrow_mut().filter_store(
-		&|_entry: &LogEntryExt| true,
-		true,
-		crate::model_internal::VISIBLE_OFF_SOURCE,
-	); //set all to active, initialize ids
-
-	let elapsed = now.elapsed();
-	log::info!(
-		"Time to create store: {}ms",
-		elapsed.as_secs() * 1000 + elapsed.subsec_millis() as u64
-	);
-	log::info!("after build_log_store");
 
 	//-------------------------------------------------------------------------------
 

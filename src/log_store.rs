@@ -84,7 +84,7 @@ pub struct LogStoreLinear {
 }
 
 impl LogStoreLinear {
-	fn compare_entries(sort_mode: SortMode, a: &LogEntryExt, b: &LogEntryExt) -> std::cmp::Ordering {
+	pub fn compare_entries(sort_mode: SortMode, a: &LogEntryExt, b: &LogEntryExt) -> std::cmp::Ordering {
 		match sort_mode {
 			SortMode::Timestamp => a
 				.timestamp
