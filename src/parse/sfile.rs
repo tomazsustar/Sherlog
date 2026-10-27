@@ -513,3 +513,62 @@ fn get_group_name(s: &str) -> String {
 	s.push_str(storage_type);
 	s
 }
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn count_entries(source: &model::LogSource) -> usize {
+		match &source.children {
+			model::LogSourceContents::Sources(v) => v.iter().map(count_entries).sum(),
+			model::LogSourceContents::Entries(v) => v.len(),
+		}
+	}
+
+	// Opens every sfile/lfile in the local test/ directory and measures the time.
+	// The sample files are not committed (see .gitignore), so the test passes without checking anything when there are none.
+	// Encrypted files require SFILE_PASSWORD to be set at build time.
+	// Run with: cargo test --release open_sfile -- --nocapture
+	#[test]
+	fn open_sfile() {
+		let test_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test");
+		let mut paths: Vec<PathBuf> = std::fs::read_dir(&test_dir)
+			.map(|dir| {
+				dir.filter_map(|entry| entry.ok().map(|entry| entry.path()))
+					.filter(|path| {
+						path.extension().map_or(false, |ext| {
+							ext.eq_ignore_ascii_case("sfile") || ext.eq_ignore_ascii_case("lfile")
+						})
+					})
+					.collect()
+			})
+			.unwrap_or_default();
+		paths.sort();
+
+		if paths.is_empty() {
+			println!("No sample files in {}, skipping", test_dir.display());
+			return;
+		}
+
+		for path in paths {
+			let start = std::time::Instant::now();
+			let mut source = from_file(&path)
+				.unwrap_or_else(|e| panic!("could not open {}: {}", path.display(), e));
+			let open_time = start.elapsed();
+
+			// Timestamps are already corrected at this point, but the scan over all entries is the same
+			let start = std::time::Instant::now();
+			glog::adjust_sensor_timestamps(&mut source);
+			let adjust_time = start.elapsed();
+
+			let entries = count_entries(&source);
+			println!(
+				"{}: entries: {}, open: {:?}, adjust_sensor_timestamps: {:?}",
+				path.file_name().unwrap().to_string_lossy(),
+				entries,
+				open_time,
+				adjust_time
+			);
+			assert!(entries > 0, "no log entries in {}", path.display());
+		}
+	}
+}

@@ -1,3 +1,6 @@
 /target
 **/*.rs.bk
 /NSIS/*.exe
+# Local sample logs for tests, not to be committed
+/test/*.sfile
+/test/*.lfile
