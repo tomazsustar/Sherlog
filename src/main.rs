@@ -1545,8 +1545,12 @@ fn build_ui(application: &gtk::Application, file_paths: &[std::path::PathBuf]) {
 	}
 }
 
-// Blinks the window in the taskbar when a file is loaded
+// Blinks the window in the taskbar when a file is loaded and the window is not focused
 fn notify_loaded(window: &gtk::ApplicationWindow) {
+	// A focused window gets no focus-in event, which stops the blinking
+	if window.is_active() {
+		return;
+	}
 	window.set_urgency_hint(true);
 
 	// Re-trigger blinking 5 seconds after load if the window is still not focused.
