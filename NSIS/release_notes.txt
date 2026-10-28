@@ -8,6 +8,25 @@
 
 -------------------------------------------------------------------------------
 
+Sherlog v0.9.7 (28.10.2026) - Commit ID: e855dc75235b8abb52fb58dd64fda5b616cd840b
+
+- Correct sensor timestamps with gPTP time sources, e.g. "Setting gPTP time [delta = 1672552120214243291 ns]"
+- Performance: 
+  - the window appears at once and the logs load in the background
+  - Read the files of an sfile in parallel and decompress faster
+  - Update flate2 to 1.1 with the zlib-rs backend
+  - Search about twice as fast
+- Improved parsing:
+  - Keep log entries around power loss: entries before flash padding, empty lines and garbage are no longer lost, and the first entry after a reboot gets the right session ID
+  - Show RDS entries with severity "warning" as warnings instead of errors
+  - Damaged sfiles no longer crash Sherlog
+- Technical: tests for malformed glog files and the timestamp correction, synthetic test files, performance tests with a history in NSIS/performance_history.csv
+
+Windows release: Sherlog-Setup-v0.9.7.exe
+SHA256: C641B89349645FF1679EA41DA023F05FEDF06523B42A4D6658B33A9EB93D4595
+
+-------------------------------------------------------------------------------
+
 Sherlog v0.9.6 (14.04.2026) - Commit ID: dbf7048b6cc7dc91bd21049ddf41e77dba137f14
 
 - Sort logs based on session number
